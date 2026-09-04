@@ -27,13 +27,11 @@ jobs:
           java-version: '17'
 
       - name: Restore Fixed Debug Keystore
+        env:
+          KEYSTORE_BASE64: ${{ secrets.DEBUG_KEYSTORE_BASE64 }}
         run: |
           mkdir -p ~/.android
-          echo "MAAAAEIAAAAAAQALYW5kcm9pZGRlYnVna2V5AAAAAY1s9v4AAAT3MIIE9zA3BgNVHQ4EMARAFO9/2pWzZ7sWpXpG8M/A4QAAAADBGA1UdIwEB/wQFMAMCAQAwDwYDVR0TAQH/BAUwAwEB/zANBgkqhkiG9w0BAQsFAAOCAQEAM1N38S4i6TqI3v5EN1x5/K7wN632J0pW2wR1v5Y1w8+8A9R3aN+4s3r0jO3+z2J38S4i6TqI3v5EN1x5/K7wN632J0pW2wR1v5Y1w8+8A9R3aN+4s3r0jO3+z2J38S4i6TqI3v5EN1x5/K7wN632J0pW2wR1v5Y1w8+8A9R3aN+4s3r0jO3+z2J38S4i6TqI3v5EN1x5/K7wN632J0pW" | base64 -d > ~/.android/debug.keystore || true
-
-          if [ ! -s ~/.android/debug.keystore ]; then
-            keytool -genkeypair -alias androiddebugkey -keypass android -keystore ~/.android/debug.keystore -storepass android -dname "CN=Android Debug,O=Android,C=US" -validity 10000 -keyalg RSA -keysize 2048
-          fi
+          echo "$KEYSTORE_BASE64" | base64 -d > ~/.android/debug.keystore
 
       - name: Install Dependencies
         run: npm install
