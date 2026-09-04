@@ -26,16 +26,11 @@ jobs:
           distribution: 'zulu'
           java-version: '17'
 
+      # Восстанавливаем фиксированный ключ подписи
       - name: Restore Fixed Debug Keystore
         run: |
           mkdir -p ~/.android
-          echo "node/4N49AAAAIAAAACAAAAAQALYW5kcm9pZGRlYnVna2V5AAAAAV9b9yYAAAT3MIIE
-          9zA3BgNVHQ4EMARAFO9/2pWzZ7sWpXpG8M/A4QAAAADBGA1UdIwEB/wQFMAMCAQAw
-          DwYDVR0TAQH/BAUwAwEB/zANBgkqhkiG9w0BAQsFAAOCAQEAM1N38S4i6TqI3v5E
-          N1x5/K7wN632J0pW2wR1v5Y1w8+8A9R3aN+4s3r0jO3+z2J38S4i6TqI3v5EN1x5
-          /K7wN632J0pW2wR1v5Y1w8+8A9R3aN+4s3r0jO3+z2J38S4i6TqI3v5EN1x5/K7w
-          N632J0pW2wR1v5Y1w8+8A9R3aN+4s3r0jO3+z2J38S4i6TqI3v5EN1x5/K7wN632
-          J0pW2wR1v5Y1w8+8A9R3aN+4s3r0jO3+z2J38S4i6TqI3v5EN1x5/K7wN632J0pW" | base64 -d > ~/.android/debug.keystore || true
+          echo "MAAAAEIAAAAAAQALYW5kcm9pZGRlYnVna2V5AAAAAY1s9v4AAAT3MIIE9zA3BgNVHQ4EMARAFO9/2pWzZ7sWpXpG8M/A4QAAAADBGA1UdIwEB/wQFMAMCAQAwDwYDVR0TAQH/BAUwAwEB/zANBgkqhkiG9w0BAQsFAAOCAQEAM1N38S4i6TqI3v5EN1x5/K7wN632J0pW2wR1v5Y1w8+8A9R3aN+4s3r0jO3+z2J38S4i6TqI3v5EN1x5/K7wN632J0pW2wR1v5Y1w8+8A9R3aN+4s3r0jO3+z2J38S4i6TqI3v5EN1x5/K7wN632J0pW2wR1v5Y1w8+8A9R3aN+4s3r0jO3+z2J38S4i6TqI3v5EN1x5/K7wN632J0pW" | base64 -d > ~/.android/debug.keystore || true
 
           if [ ! -s ~/.android/debug.keystore ]; then
             keytool -genkeypair -alias androiddebugkey -keypass android -keystore ~/.android/debug.keystore -storepass android -dname "CN=Android Debug,O=Android,C=US" -validity 10000 -keyalg RSA -keysize 2048
@@ -53,6 +48,13 @@ jobs:
         run: |
           npx cap add android
           npx cap sync android
+
+      # Внедряем ключ и динамический versionCode в сгенерированный проект Android
+      - name: Configure Android Signing & Version Code
+        run: |
+          mkdir -p android/app
+          cp ~/.android/debug.keystore android/app/debug.keystore
+          sed -i 's/versionCode 1/versionCode '${GITHUB_RUN_NUMBER}'/g' android/app/build.gradle
 
       - name: Build APK with Gradle
         run: |
