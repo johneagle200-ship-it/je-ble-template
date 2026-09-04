@@ -7,8 +7,19 @@ class MainApp extends BaseBLEDevice {
   }
 
   onTelemetry(data) {
-    if (data.val !== undefined) {
-      document.getElementById('telemetryData').innerText = data.val;
+    // 1. Выводим счётчик пакетов от ESP32 в центральный блок
+    if (data.counter !== undefined) {
+      const el = document.getElementById('telemetryData');
+      if (el) el.innerText = `# ${data.counter}`;
+    } else if (data.val !== undefined) {
+      const el = document.getElementById('telemetryData');
+      if (el) el.innerText = data.val;
+    }
+
+    // 2. Если понадобится вывести время работы ESP32 (в секундах)
+    if (data.uptime !== undefined) {
+      const uptimeEl = document.getElementById('uptimeData');
+      if (uptimeEl) uptimeEl.innerText = `${data.uptime} с`;
     }
   }
 }
