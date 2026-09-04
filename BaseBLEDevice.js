@@ -7,7 +7,6 @@ class BaseBLEDevice {
     this.txUuid = "6e400003-b5a3-f393-e0a9-e50e24dcca9e";
     this.namePrefix = "JE_";
 
-    // Указываем значение по умолчанию, если fetch package.json не сработает
     this.currentAppVersion = config.appVersion || "1.0.0";
     this.espFwVersion = null;
     this.latestRemoteVersion = null;
@@ -123,7 +122,10 @@ class BaseBLEDevice {
       if (!remoteVersion) return;
       this.latestRemoteVersion = remoteVersion;
 
+      let hasUpdate = false;
+
       if (this.isNewerVersion(remoteVersion, this.currentAppVersion)) {
+        hasUpdate = true;
         const textEl = document.getElementById('updateNoticeText');
         const btnApp = document.getElementById('btnUpdateApp');
         const noticeEl = document.getElementById('updateNotice');
@@ -133,12 +135,18 @@ class BaseBLEDevice {
       }
 
       if (this.espFwVersion && this.isNewerVersion(remoteVersion, this.espFwVersion)) {
+        hasUpdate = true;
         const textEl = document.getElementById('updateNoticeText');
         const btnFw = document.getElementById('btnUpdateFW');
         const noticeEl = document.getElementById('updateNotice');
         if (textEl) textEl.innerText = `Доступна новая прошивка ESP32 v${this.latestRemoteVersion}!`;
         if (btnFw) btnFw.style.display = 'inline-block';
         if (noticeEl) noticeEl.style.display = 'block';
+      }
+
+      if (hasUpdate) {
+        const badge = document.getElementById('menuBadge');
+        if (badge) badge.style.display = 'block';
       }
     } catch (e) {
       console.log("[JE Core] Ошибка проверки обновлений:", e);
@@ -308,6 +316,9 @@ class BaseBLEDevice {
           if (textEl) textEl.innerText = `Доступна новая прошивка ESP32 v${this.latestRemoteVersion}!`;
           if (btnFw) btnFw.style.display = 'inline-block';
           if (noticeEl) noticeEl.style.display = 'block';
+
+          const badge = document.getElementById('menuBadge');
+          if (badge) badge.style.display = 'block';
         }
         return;
       }
