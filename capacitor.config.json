@@ -1,6 +1,6 @@
 {
-  "appId": "io.github.johneagle200.rectification",
-  "appName": "Ректификация",
+  "appId": "io.github.johneagle200.bletemplate",
+  "appName": "JE BLE App",
   "webDir": "www",
   "server": {
     "androidScheme": "https"
