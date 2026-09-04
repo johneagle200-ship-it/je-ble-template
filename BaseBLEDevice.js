@@ -171,76 +171,28 @@ class BaseBLEDevice {
       clearTimeout(this.reconnectTimer);
       this.updateUI("connecting");
 
-      let modal = document.getElementById('scanModal');
-      if (!modal) {
-        modal = document.createElement('div');
-        modal.id = 'scanModal';
-        modal.className = 'menu-drawer';
-        modal.style.zIndex = '10000';
-        document.body.appendChild(modal);
-      }
-
-      modal.innerHTML = `
-        <div class="menu-content" style="width: 100%; max-width: 320px; margin: auto; height: auto; max-height: 80vh; border-radius: 16px;">
-          <div class="menu-header">
-            <h3>Поиск устройств...</h3>
-            <button class="btn-close" id="btnCloseScan">&times;</button>
-          </div>
-          <div id="scanList" class="btn-group-vertical" style="max-height: 300px; overflow-y: auto;">
-            <div style="color: #aaa; padding: 10px; text-align: center;">Поиск JE-устройств...</div>
-          </div>
-        </div>
-      `;
-      modal.style.display = 'flex';
-
-      const foundDevices = new Map();
-
-      const scanListener = await this.BluetoothLe.addListener('scanResult', (result) => {
-        const dev = result.device;
-        let rawName = dev.name || dev.localName;
-
-        if (rawName && rawName.startsWith(this.namePrefix)) {
-          const cleanName = rawName.split('(')[0].trim();
-          foundDevices.set(dev.deviceId, cleanName);
-
-          const scanList = document.getElementById('scanList');
-          if (scanList) {
-            scanList.innerHTML = '';
-            foundDevices.forEach((name, id) => {
-              const btn = document.createElement('button');
-              btn.className = 'btn-secondary';
-              btn.style.textAlign = 'left';
-              btn.innerText = name;
-              btn.onclick = async () => {
-                await this.stopDeviceScan(scanListener);
-                modal.style.display = 'none';
-
-                this.connectedDeviceId = id;
-                localStorage.setItem("savedDeviceId", id);
-                localStorage.setItem("savedDeviceName", name);
-
-                const devNameEl = document.getElementById('deviceName');
-                if (devNameEl) devNameEl.innerText = name;
-
-                this.isExplicitDisconnect = false;
-                this.connectNativeBLE(id);
-              };
-              scanList.appendChild(btn);
-            });
-          }
-        }
+      // Системный диалог поиска и выбора устройств
+      const result = await this.BluetoothLe.requestDevice({
+        displayUnconnected: true
       });
 
-      document.getElementById('btnCloseScan').onclick = async () => {
-        await this.stopDeviceScan(scanListener);
-        modal.style.display = 'none';
+      if (result && result.deviceId) {
+        const deviceName = result.name || result.deviceId;
+        this.connectedDeviceId = result.deviceId;
+
+        localStorage.setItem("savedDeviceId", result.deviceId);
+        localStorage.setItem("savedDeviceName", deviceName);
+
+        const devNameEl = document.getElementById('deviceName');
+        if (devNameEl) devNameEl.innerText = deviceName;
+
+        this.isExplicitDisconnect = false;
+        this.connectNativeBLE(result.deviceId);
+      } else {
         this.updateUI("disconnected");
-      };
-
-      await this.BluetoothLe.startScan({ namePrefix: this.namePrefix });
-
+      }
     } catch (e) {
-      console.error("[JE Core] Ошибка сканирования:", e);
+      console.log("[JE Core] Отмена или ошибка выбора устройства:", e);
       this.updateUI("disconnected");
     }
   }
