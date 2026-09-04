@@ -26,7 +26,6 @@ jobs:
           distribution: 'zulu'
           java-version: '17'
 
-      # Восстанавливаем единый фиксированный debug.keystore
       - name: Restore Fixed Debug Keystore
         run: |
           mkdir -p ~/.android
@@ -48,7 +47,7 @@ jobs:
       - name: Prepare Web Assets
         run: |
           mkdir -p www
-          cp index.html app.js package.json manifest.json icon-*.png www/ 2>/dev/null || true
+          cp index.html app.js BaseBLEDevice.js package.json manifest.json icon-*.png www/ 2>/dev/null || true
 
       - name: Add Android & Sync Capacitor
         run: |
@@ -64,7 +63,7 @@ jobs:
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: rectification-app
+          name: je-ble-app
           path: android/app/build/outputs/apk/debug/app-debug.apk
 
       - name: Create GitHub Release
