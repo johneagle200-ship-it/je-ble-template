@@ -15,18 +15,21 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
+      # Включено кэширование npm пакетов
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: 20
+          cache: 'npm'
 
+      # Включено кэширование зависимостей Gradle и Android SDK
       - name: Setup Java JDK
         uses: actions/setup-java@v4
         with:
           distribution: 'zulu'
           java-version: '17'
+          cache: 'gradle'
 
-      # Восстанавливаем фиксированный ключ подписи
       - name: Restore Fixed Debug Keystore
         run: |
           mkdir -p ~/.android
@@ -37,7 +40,7 @@ jobs:
           fi
 
       - name: Install Dependencies
-        run: npm install
+        run: npm ci || npm install
 
       - name: Prepare Web Assets
         run: |
@@ -46,21 +49,21 @@ jobs:
 
       - name: Add Android & Sync Capacitor
         run: |
-          npx cap add android
+          npx cap add android || true
           npx cap sync android
 
-      # Внедряем ключ и динамический versionCode в сгенерированный проект Android
       - name: Configure Android Signing & Version Code
         run: |
           mkdir -p android/app
           cp ~/.android/debug.keystore android/app/debug.keystore
           sed -i 's/versionCode 1/versionCode '${GITHUB_RUN_NUMBER}'/g' android/app/build.gradle
 
+      # Сборка с использованием кэша компиляции
       - name: Build APK with Gradle
         run: |
           cd android
           chmod +x gradlew
-          ./gradlew assembleDebug
+          ./gradlew assembleDebug --build-cache
 
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
