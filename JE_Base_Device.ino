@@ -1,84 +1,79 @@
+#include <Arduino.h>
+#include <U8g2lib.h>
+#include <Wire.h>
 #include <BLEDevice.h>
 #include <BLEServer.h>
 #include <BLEUtils.h>
 #include <BLE2902.h>
-#include <Update.h>
-#include <ArduinoJson.h>
 
 #define DEVICE_NAME "JE_BaseDevice"
 #define FW_VERSION  "1.0.0"
 
+// --- НАСТРОЙКИ ПИНОВ I2C ---
+#define I2C_SDA 5
+#define I2C_SCL 6
+
+// U8g2 под экран 0.42" (матрица 72x40 внутри буфера 128x64)
+U8G2_SSD1306_128X64_NONAME_F_HW_I2C u8g2(U8G2_R0, U8X8_PIN_NONE, I2C_SCL, I2C_SDA);
+
+// Смещения под экран 0.42"
+const int xOffset = 28;
+const int yOffset = 24;
+
+// --- UUID ДЛЯ NORDIC UART SERVICE ---
 #define SERVICE_UUID           "6e400001-b5a3-f393-e0a9-e50e24dcca9e"
 #define CHARACTERISTIC_UUID_RX "6e400002-b5a3-f393-e0a9-e50e24dcca9e"
 #define CHARACTERISTIC_UUID_TX "6e400003-b5a3-f393-e0a9-e50e24dcca9e"
 
+// --- ГЛОБАЛЬНЫЕ ПЕРЕМЕННЫЕ СОСТОЯНИЯ ---
 BLEServer *pServer = NULL;
-BLECharacteristic *pTxCharacteristic;
+BLECharacteristic *pTxCharacteristic = NULL;
 bool deviceConnected = false;
-bool otaMode = false;
+bool oldDeviceConnected = false;
 
-// Отправка системных данных приложения (Handshake)
-void sendHandshake() {
-  StaticJsonDocument<200> doc;
-  JsonObject sys = doc.createNestedObject("sys");
-  sys["fw"] = FW_VERSION;
-  sys["dev"] = DEVICE_NAME;
+// --- ОБНОВЛЕНИЕ ЭКРАНА ---
+void updateDisplay() {
+  u8g2.clearBuffer();
+  u8g2.setFont(u8g2_font_ncenB08_tr);
 
-  String output;
-  serializeJson(doc, output);
-  pTxCharacteristic->setValue(output.c_str());
-  pTxCharacteristic->notify();
+  char buf1[16], buf2[16], buf3[16];
+  snprintf(buf1, sizeof(buf1), "%s", DEVICE_NAME);
+  snprintf(buf2, sizeof(buf2), "FW: %s", FW_VERSION);
+  snprintf(buf3, sizeof(buf3), "BLE: %s", deviceConnected ? "CONNECTED" : "DISCONNECT");
+
+  // Отрисовка со смещениями yOffset и xOffset
+  u8g2.drawStr(xOffset, 10 + yOffset, buf1);
+  u8g2.drawStr(xOffset, 22 + yOffset, buf2);
+  u8g2.drawStr(xOffset, 34 + yOffset, buf3);
+
+  u8g2.sendBuffer();
 }
 
+// --- ОБРАБОТКА ПОДКЛЮЧЕНИЙ BLE ---
 class MyServerCallbacks: public BLEServerCallbacks {
-    void onConnect(BLEServer* pServer) {
+    void onConnect(BLEServer* pServer) override {
       deviceConnected = true;
+      Serial.println("[BLE] Клиент подключен");
     };
 
-    void onDisconnect(BLEServer* pServer) {
+    void onDisconnect(BLEServer* pServer) override {
       deviceConnected = false;
-      pServer->getAdvertising()->start();
+      Serial.println("[BLE] Клиент отключен");
     }
 };
 
-class MyCallbacks: public BLECharacteristicCallbacks {
-    void onWrite(BLECharacteristic *pCharacteristic) {
-      uint8_t* rxValue = pCharacteristic->getData();
-      size_t length = pCharacteristic->getLength();
+// --- ОБРАБОТКА ВХОДЯЩИХ КОМАНД С ПРИЛОЖЕНИЯ (RX) ---
+class MyRxCallbacks: public BLECharacteristicCallbacks {
+    void onWrite(BLECharacteristic *pCharacteristic) override {
+      String rxValue = pCharacteristic->getValue().c_str();
 
-      if (length == 0) return;
+      if (rxValue.length() > 0) {
+        Serial.print("[BLE RX]: ");
+        Serial.println(rxValue);
 
-      // Прием бинарных пакетов прошивки OTA
-      if (otaMode) {
-        if (rxValue[0] == '{') {
-          StaticJsonDocument<200> doc;
-          deserializeJson(doc, rxValue, length);
-          if (doc["cmd"] == "OTA_END") {
-            if (Update.end(true)) {
-              ESP.restart();
-            }
-            otaMode = false;
-            return;
-          }
-        }
-        Update.write(rxValue, length);
-        return;
-      }
-
-      // Прием JSON-команд управления и синхронизации
-      if (rxValue[0] == '{') {
-        StaticJsonDocument<200> doc;
-        DeserializationError error = deserializeJson(doc, rxValue, length);
-        if (!error) {
-          if (doc["cmd"] == "get_sys") {
-            sendHandshake();
-          } else if (doc["cmd"] == "OTA_START") {
-            size_t otaSize = doc["size"];
-            if (Update.begin(otaSize)) {
-              otaMode = true;
-            }
-          }
-        }
+        // Тут дочерние проекты смогут разбирать свои команды
+        
+        updateDisplay();
       }
     }
 };
@@ -86,36 +81,71 @@ class MyCallbacks: public BLECharacteristicCallbacks {
 void setup() {
   Serial.begin(115200);
 
+  // 1. Старт I2C и дисплея U8g2
+  Wire.begin(I2C_SDA, I2C_SCL);
+  u8g2.begin();
+  updateDisplay();
+
+  // 2. Инициализация BLE
   BLEDevice::init(DEVICE_NAME);
   pServer = BLEDevice::createServer();
   pServer->setCallbacks(new MyServerCallbacks());
 
   BLEService *pService = pServer->createService(SERVICE_UUID);
-  pTxCharacteristic = pService->createCharacteristic(CHARACTERISTIC_UUID_TX, BLECharacteristic::PROPERTY_NOTIFY);
+
+  // TX Характеристика (Notify)
+  pTxCharacteristic = pService->createCharacteristic(
+                        CHARACTERISTIC_UUID_TX,
+                        BLECharacteristic::PROPERTY_NOTIFY
+                      );
   pTxCharacteristic->addDescriptor(new BLE2902());
 
-  BLECharacteristic *pRxCharacteristic = pService->createCharacteristic(CHARACTERISTIC_UUID_RX, BLECharacteristic::PROPERTY_WRITE | BLECharacteristic::PROPERTY_WRITE_NR);
-  pRxCharacteristic->setCallbacks(new MyCallbacks());
+  // RX Характеристика (Write)
+  BLECharacteristic *pRxCharacteristic = pService->createCharacteristic(
+                                           CHARACTERISTIC_UUID_RX,
+                                           BLECharacteristic::PROPERTY_WRITE | BLECharacteristic::PROPERTY_WRITE_NR
+                                         );
+  pRxCharacteristic->setCallbacks(new MyRxCallbacks());
 
+  // Старт сервиса и рассылка имени в эфир
   pService->start();
-  pServer->getAdvertising()->start();
-  Serial.println("JE BLE Устройство готово!");
+  BLEAdvertising *pAdvertising = BLEDevice::getAdvertising();
+  pAdvertising->addServiceUUID(SERVICE_UUID);
+  pAdvertising->setScanResponse(true);
+  pAdvertising->setMinPreferred(0x06);
+  pAdvertising->setMinPreferred(0x12);
+  BLEDevice::startAdvertising();
+
+  Serial.println("[BLE] Готов к работе, жду подключения...");
 }
 
 void loop() {
-  static unsigned long lastTime = 0;
+  // 1. Автоперезапуск Advertising при обрыве связи
+  if (!deviceConnected && oldDeviceConnected) {
+    delay(500);
+    pServer->startAdvertising(); 
+    Serial.println("[BLE] Перезапуск видимости...");
+    oldDeviceConnected = deviceConnected;
+    updateDisplay();
+  }
 
-  // Нейтральная телеметрия: пинг устройства раз в 5 секунд
-  if (deviceConnected && !otaMode && millis() - lastTime > 5000) {
-    lastTime = millis();
-    
-    StaticJsonDocument<100> doc;
-    doc["status"] = "online";
-    doc["uptime"] = millis() / 1000;
+  if (deviceConnected && !oldDeviceConnected) {
+    oldDeviceConnected = deviceConnected;
+    updateDisplay();
+  }
 
-    String output;
-    serializeJson(doc, output);
-    pTxCharacteristic->setValue(output.c_str());
+  // 2. Нейтральный системный пинг раз в 5 секунд при активном подключении
+  static unsigned long lastTxTime = 0;
+  if (deviceConnected && (millis() - lastTxTime > 5000)) {
+    lastTxTime = millis();
+
+    char jsonBuf[64];
+    snprintf(jsonBuf, sizeof(jsonBuf), "{\"status\":\"online\",\"uptime\":%lu}", millis() / 1000);
+
+    pTxCharacteristic->setValue((uint8_t*)jsonBuf, strlen(jsonBuf));
     pTxCharacteristic->notify();
+
+    Serial.print("[BLE TX Send]: ");
+    Serial.println(jsonBuf);
   }
 }
