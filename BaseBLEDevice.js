@@ -28,7 +28,10 @@ class BaseBLEDevice {
         await this.BluetoothLe.requestPermissions();
 
         const savedName = localStorage.getItem("savedDeviceName");
-        if (savedName) document.getElementById('deviceName').innerText = savedName;
+        if (savedName) {
+          const el = document.getElementById('deviceName');
+          if (el) el.innerText = savedName;
+        }
 
         const savedId = localStorage.getItem("savedDeviceId");
         if (savedId) {
@@ -81,16 +84,22 @@ class BaseBLEDevice {
 
       // 1. Проверка мобильного приложения
       if (this.isNewerVersion(remoteVersion, this.currentAppVersion)) {
-        document.getElementById('updateNoticeText').innerText = `Доступна новая версия приложения v${remoteVersion}!`;
-        document.getElementById('btnUpdateApp').style.display = 'inline-block';
-        document.getElementById('updateNotice').style.display = 'block';
+        const textEl = document.getElementById('updateNoticeText');
+        const btnApp = document.getElementById('btnUpdateApp');
+        const noticeEl = document.getElementById('updateNotice');
+        if (textEl) textEl.innerText = `Доступна новая версия приложения v${remoteVersion}!`;
+        if (btnApp) btnApp.style.display = 'inline-block';
+        if (noticeEl) noticeEl.style.display = 'block';
       }
 
       // 2. Проверка прошивки ESP32
       if (this.espFwVersion && this.isNewerVersion(remoteVersion, this.espFwVersion)) {
-        document.getElementById('updateNoticeText').innerText = `Доступна новая прошивка ESP32 v${remoteVersion}!`;
-        document.getElementById('btnUpdateFW').style.display = 'inline-block';
-        document.getElementById('updateNotice').style.display = 'block';
+        const textEl = document.getElementById('updateNoticeText');
+        const btnFw = document.getElementById('btnUpdateFW');
+        const noticeEl = document.getElementById('updateNotice');
+        if (textEl) textEl.innerText = `Доступна новая прошивка ESP32 v${remoteVersion}!`;
+        if (btnFw) btnFw.style.display = 'inline-block';
+        if (noticeEl) noticeEl.style.display = 'block';
       }
     } catch (e) {
       console.log("[JE Core] Ошибка проверки обновлений:", e);
@@ -115,14 +124,22 @@ class BaseBLEDevice {
       clearTimeout(this.reconnectTimer);
       this.updateUI("connecting");
 
-      const device = await this.BluetoothLe.requestDevice({ namePrefix: this.namePrefix });
+      const device = await this.BluetoothLe.requestDevice({
+        namePrefix: this.namePrefix
+      });
+
       if (device && device.deviceId) {
         this.connectedDeviceId = device.deviceId;
-        const devName = device.name || "JE_Device";
+
+        // Очищаем имя от системных адресов или скобок, оставляем только чистое имя
+        let devName = device.name || device.localName || "JE_Device";
+        devName = devName.split('(')[0].trim();
 
         localStorage.setItem("savedDeviceId", this.connectedDeviceId);
         localStorage.setItem("savedDeviceName", devName);
-        document.getElementById('deviceName').innerText = devName;
+
+        const devNameEl = document.getElementById('deviceName');
+        if (devNameEl) devNameEl.innerText = devName;
 
         this.isExplicitDisconnect = false;
         this.connectNativeBLE(this.connectedDeviceId);
@@ -187,11 +204,16 @@ class BaseBLEDevice {
 
       if (data.sys) {
         this.espFwVersion = data.sys.fw;
-        document.getElementById('espFwVersion').innerText = `(FW: v${data.sys.fw})`;
+        const espVerEl = document.getElementById('espFwVersion');
+        if (espVerEl) espVerEl.innerText = `(FW: v${data.sys.fw})`;
+
         if (this.latestRemoteVersion && this.isNewerVersion(this.latestRemoteVersion, data.sys.fw)) {
-          document.getElementById('updateNoticeText').innerText = `Доступна новая прошивка ESP32 v${this.latestRemoteVersion}!`;
-          document.getElementById('btnUpdateFW').style.display = 'inline-block';
-          document.getElementById('updateNotice').style.display = 'block';
+          const textEl = document.getElementById('updateNoticeText');
+          const btnFw = document.getElementById('btnUpdateFW');
+          const noticeEl = document.getElementById('updateNotice');
+          if (textEl) textEl.innerText = `Доступна новая прошивка ESP32 v${this.latestRemoteVersion}!`;
+          if (btnFw) btnFw.style.display = 'inline-block';
+          if (noticeEl) noticeEl.style.display = 'block';
         }
         return;
       }
@@ -205,7 +227,8 @@ class BaseBLEDevice {
 
     try {
       this.isOtaInProgress = true;
-      document.getElementById('bleStatus').innerText = "Загрузка файла...";
+      const statusEl = document.getElementById('bleStatus');
+      if (statusEl) statusEl.innerText = "Загрузка файла...";
 
       const binUrl = `https://github.com/${this.repoOwner}/${this.repoName}/releases/download/latest/firmware.bin`;
       const res = await fetch(binUrl);
@@ -230,7 +253,7 @@ class BaseBLEDevice {
         });
 
         let percent = Math.round((offset / total) * 100);
-        document.getElementById('bleStatus').innerText = `Прошивка ESP32: ${percent}%`;
+        if (statusEl) statusEl.innerText = `Прошивка ESP32: ${percent}%`;
       }
 
       await this.sendCmd(JSON.stringify({ cmd: "OTA_END" }));
