@@ -7,7 +7,8 @@ class BaseBLEDevice {
     this.txUuid = "6e400003-b5a3-f393-e0a9-e50e24dcca9e";
     this.namePrefix = "JE_";
 
-    this.currentAppVersion = "0.0.0";
+    // Указываем значение по умолчанию, если fetch package.json не сработает
+    this.currentAppVersion = config.appVersion || "1.0.0";
     this.espFwVersion = null;
     this.latestRemoteVersion = null;
 
@@ -20,6 +21,7 @@ class BaseBLEDevice {
   }
 
   async init() {
+    this.updateVersionUI();
     await this.loadAppVersion();
 
     if (this.BluetoothLe) {
@@ -27,10 +29,8 @@ class BaseBLEDevice {
         await this.BluetoothLe.initialize();
         await this.BluetoothLe.requestPermissions();
 
-        // Пауза 500мс для полной готовности стека BLE в Android после старта
         await new Promise(r => setTimeout(r, 500));
 
-        // Подписываемся на системный разрыв соединения
         try {
           await this.BluetoothLe.addListener('disconnected', (info) => {
             console.log("[JE Core] Связь потеряна:", info);
@@ -54,12 +54,11 @@ class BaseBLEDevice {
         const savedId = localStorage.getItem("savedDeviceId");
         if (savedId) {
           this.connectedDeviceId = savedId;
-          this.isExplicitDisconnect = false; // Флаг ручного отключения сброшен
+          this.isExplicitDisconnect = false;
           this.connectNativeBLE(savedId);
         }
       } catch (e) {
         console.error("[JE Core] Ошибка инициализации BLE:", e);
-        // Если инициализация запнулась при старте, пробуем автоподключение через 2 секунды
         const savedId = localStorage.getItem("savedDeviceId");
         if (savedId) {
           this.connectedDeviceId = savedId;
@@ -79,11 +78,27 @@ class BaseBLEDevice {
         const pkg = await res.json();
         if (pkg.version) {
           this.currentAppVersion = pkg.version;
-          const versionEl = document.getElementById('appVersion');
-          if (versionEl) versionEl.innerText = `v${this.currentAppVersion}`;
+          this.updateVersionUI();
         }
       }
-    } catch (e) {}
+    } catch (e) {
+      this.updateVersionUI();
+    }
+  }
+
+  updateVersionUI() {
+    const versionEl = document.getElementById('appVersion');
+    if (versionEl) versionEl.innerText = `v${this.currentAppVersion}`;
+
+    const espVerEl = document.getElementById('espFwVersion');
+    if (espVerEl) {
+      espVerEl.innerText = `v${this.espFwVersion || this.currentAppVersion}`;
+    }
+
+    const espTextEl = document.getElementById('espFwText');
+    if (espTextEl) {
+      espTextEl.innerText = `v${this.espFwVersion || this.currentAppVersion}`;
+    }
   }
 
   isNewerVersion(remote, current) {
@@ -108,7 +123,6 @@ class BaseBLEDevice {
       if (!remoteVersion) return;
       this.latestRemoteVersion = remoteVersion;
 
-      // 1. Проверка мобильного приложения
       if (this.isNewerVersion(remoteVersion, this.currentAppVersion)) {
         const textEl = document.getElementById('updateNoticeText');
         const btnApp = document.getElementById('btnUpdateApp');
@@ -118,7 +132,6 @@ class BaseBLEDevice {
         if (noticeEl) noticeEl.style.display = 'block';
       }
 
-      // 2. Проверка прошивки ESP32
       if (this.espFwVersion && this.isNewerVersion(remoteVersion, this.espFwVersion)) {
         const textEl = document.getElementById('updateNoticeText');
         const btnFw = document.getElementById('btnUpdateFW');
@@ -229,14 +242,7 @@ class BaseBLEDevice {
 
       if (data.sys) {
         this.espFwVersion = data.sys.fw;
-        
-        // В шапку выводим чистую версию, чтобы бейдж не раздувало
-        const espVerEl = document.getElementById('espFwVersion');
-        if (espVerEl) espVerEl.innerText = `v${data.sys.fw}`;
-
-        // В инфо-карточку внутри шторки
-        const espTextEl = document.getElementById('espFwText');
-        if (espTextEl) espTextEl.innerText = `v${data.sys.fw}`;
+        this.updateVersionUI();
 
         if (this.latestRemoteVersion && this.isNewerVersion(this.latestRemoteVersion, data.sys.fw)) {
           const textEl = document.getElementById('updateNoticeText');
