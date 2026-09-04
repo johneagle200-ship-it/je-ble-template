@@ -48,6 +48,17 @@ jobs:
           npx cap add android || true
           npx cap sync android
 
+      # Генерация нативных иконок Android из icon-512.png
+      - name: Generate Android App Icons
+        run: |
+          mkdir -p assets
+          cp icon-512.png assets/icon-only.png
+          cp icon-512.png assets/icon-foreground.png
+          npx --yes @capacitor/assets generate --android || {
+            find android/app/src/main/res/ -name "ic_launcher*.png" -exec cp icon-512.png {} \;
+            rm -f android/app/src/main/res/mipmap-anydpi-v26/ic_launcher*.xml
+          }
+
       - name: Configure Android Signing & Version Code
         run: |
           mkdir -p android/app
