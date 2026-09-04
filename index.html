@@ -18,15 +18,16 @@
       font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
     }
 
-    /* Верхняя панель на всю ширину экрана */
+    /* Верхняя панель с относительным позиционированием */
     .app-header {
+      position: relative;
       display: flex;
-      justify-content: space-between;
       align-items: center;
-      padding: 14px 16px;
+      padding: 12px 16px;
       background: #1e1e1e;
       border-bottom: 1px solid #2a2a2a;
       width: 100%;
+      min-height: 56px;
       box-sizing: border-box;
     }
 
@@ -56,17 +57,19 @@
       line-height: 1;
     }
 
-    /* Кнопка гамбургер жестко прижата в правый угол */
+    /* Кнопка гамбургер — жёстко прижата к правому краю */
     .menu-btn {
-      position: relative;
+      position: absolute;
+      right: 16px;
+      top: 50%;
+      transform: translateY(-50%);
       background: transparent;
       border: none;
       cursor: pointer;
-      padding: 6px;
+      padding: 8px;
       display: flex;
       flex-direction: column;
       gap: 5px;
-      margin-left: auto;
       z-index: 10;
     }
 
@@ -79,8 +82,8 @@
 
     .menu-badge {
       position: absolute;
-      top: 2px;
-      right: 2px;
+      top: 4px;
+      right: 4px;
       width: 8px;
       height: 8px;
       background-color: #ff3b30;
@@ -108,7 +111,7 @@
     .status.pending { color: #ffca28; }
     .val { font-size: 38px; font-weight: bold; color: #00e676; margin-top: 10px; }
 
-    /* Нижняя плавающая панель подключения */
+    /* Нижняя плавающая кнопка */
     .bottom-bar {
       position: fixed;
       bottom: 0;
@@ -122,7 +125,7 @@
       box-sizing: border-box;
     }
 
-    /* Выпадающее боковое меню */
+    /* Боковая шторка */
     .menu-drawer {
       position: fixed;
       top: 0;
@@ -217,14 +220,14 @@
 </head>
 <body>
 
-  <!-- Верхняя панель -->
+  <!-- Шапка -->
   <header class="app-header">
     <div class="header-left">
       <h2 id="appTitle">JE Device</h2>
-      <span id="espFwVersion" class="ver-badge">v--</span>
+      <span id="espFwVersion" class="ver-badge">v1.0.0</span>
     </div>
 
-    <!-- Кнопка вызова меню (прижата вправо) -->
+    <!-- Гамбургер -->
     <button id="btnMenu" class="menu-btn" onclick="toggleMenu()">
       <div class="hamburger-line"></div>
       <div class="hamburger-line"></div>
@@ -233,7 +236,7 @@
     </button>
   </header>
 
-  <!-- Главный экран -->
+  <!-- Рабочая область -->
   <main class="main-container">
     <div class="card">
       <div class="device-info">
@@ -248,12 +251,12 @@
     </div>
   </main>
 
-  <!-- Нижняя плавающая кнопка подключения -->
+  <!-- Нижняя кнопка подключателя -->
   <div id="bottomConnectBar" class="bottom-bar">
     <button id="btnConnect" onclick="app.connectOrReconnect()">Подключиться</button>
   </div>
 
-  <!-- Шторка меню -->
+  <!-- Меню -->
   <div id="settingsMenu" class="menu-drawer" style="display: none;">
     <div class="menu-content">
       <div class="menu-header">
@@ -262,8 +265,8 @@
       </div>
 
       <div class="info-card">
-        <p>Приложение: <strong id="appVersion">v--</strong></p>
-        <p>Прошивка ESP32: <strong id="espFwText">v--</strong></p>
+        <p>Приложение: <strong id="appVersion">v1.0.0</strong></p>
+        <p>Прошивка ESP32: <strong id="espFwText">v1.0.0</strong></p>
         <p>Связь: <strong id="bleStatusInMenu">Отключено</strong></p>
       </div>
 
@@ -287,7 +290,7 @@
   </div>
 
   <script>
-    // Прямой метод открытия/закрытия меню
+    // Автономная глобальная функция для открытия шторки
     function toggleMenu() {
       const menu = document.getElementById('settingsMenu');
       if (menu) {
