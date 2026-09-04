@@ -1,7 +1,7 @@
 {
-  "name": "rectification-controller-apk",
-  "version": "1.0.8",
-  "description": "BLE Rectification Controller",
+  "name": "je-ble-template",
+  "version": "1.0.0",
+  "description": "Base Starter Template for JE BLE Devices",
   "scripts": {
     "build": "echo 'No build step required'"
   },
