@@ -229,8 +229,14 @@ class BaseBLEDevice {
 
       if (data.sys) {
         this.espFwVersion = data.sys.fw;
+        
+        // В шапку выводим чистую версию, чтобы бейдж не раздувало
         const espVerEl = document.getElementById('espFwVersion');
-        if (espVerEl) espVerEl.innerText = `(FW: v${data.sys.fw})`;
+        if (espVerEl) espVerEl.innerText = `v${data.sys.fw}`;
+
+        // В инфо-карточку внутри шторки
+        const espTextEl = document.getElementById('espFwText');
+        if (espTextEl) espTextEl.innerText = `v${data.sys.fw}`;
 
         if (this.latestRemoteVersion && this.isNewerVersion(this.latestRemoteVersion, data.sys.fw)) {
           const textEl = document.getElementById('updateNoticeText');
@@ -310,28 +316,30 @@ class BaseBLEDevice {
 
   updateUI(state) {
     const statusEl = document.getElementById('bleStatus');
-    const btnConnect = document.getElementById('btnConnect');
+    const statusInMenu = document.getElementById('bleStatusInMenu');
+    const bottomBar = document.getElementById('bottomConnectBar');
     const btnDisconnect = document.getElementById('btnDisconnect');
-    if (!statusEl) return;
+
+    let textState = "Отключено";
 
     if (state === "connected") {
-      statusEl.innerText = "Подключено";
-      statusEl.className = "status connected";
-      if (btnConnect) btnConnect.style.display = "none";
-      if (btnDisconnect) btnDisconnect.style.display = "inline-block";
+      textState = "Подключено";
+      if (statusEl) statusEl.className = "status connected";
+      if (bottomBar) bottomBar.style.display = "none";
+      if (btnDisconnect) btnDisconnect.style.display = "block";
     } else if (state === "connecting" || state === "reconnecting") {
-      statusEl.innerText = state === "connecting" ? "Подключение..." : "Поиск...";
-      statusEl.className = "status pending";
-      if (btnConnect) btnConnect.style.display = "none";
-      if (btnDisconnect) btnDisconnect.style.display = "inline-block";
+      textState = state === "connecting" ? "Подключение..." : "Поиск...";
+      if (statusEl) statusEl.className = "status pending";
+      if (bottomBar) bottomBar.style.display = "none";
+      if (btnDisconnect) btnDisconnect.style.display = "block";
     } else {
-      statusEl.innerText = "Отключено";
-      statusEl.className = "status";
-      if (btnConnect) {
-        btnConnect.style.display = "inline-block";
-        btnConnect.innerText = this.connectedDeviceId ? "Подключить" : "Найти устройство";
-      }
+      textState = "Отключено";
+      if (statusEl) statusEl.className = "status";
+      if (bottomBar) bottomBar.style.display = "block";
       if (btnDisconnect) btnDisconnect.style.display = "none";
     }
+
+    if (statusEl) statusEl.innerText = textState;
+    if (statusInMenu) statusInMenu.innerText = textState;
   }
 }
