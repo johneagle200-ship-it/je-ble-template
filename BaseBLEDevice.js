@@ -27,6 +27,24 @@ class BaseBLEDevice {
         await this.BluetoothLe.initialize();
         await this.BluetoothLe.requestPermissions();
 
+        // Пауза 500мс для полной готовности стека BLE в Android после старта
+        await new Promise(r => setTimeout(r, 500));
+
+        // Подписываемся на системный разрыв соединения
+        try {
+          await this.BluetoothLe.addListener('disconnected', (info) => {
+            console.log("[JE Core] Связь потеряна:", info);
+            if (!this.isExplicitDisconnect && this.connectedDeviceId) {
+              this.updateUI("reconnecting");
+              this.scheduleReconnect(1000);
+            } else {
+              this.updateUI("disconnected");
+            }
+          });
+        } catch (err) {
+          console.log("[JE Core] Слушатель событий BLE уже инициализирован");
+        }
+
         const savedName = localStorage.getItem("savedDeviceName");
         if (savedName) {
           const el = document.getElementById('deviceName');
@@ -36,10 +54,18 @@ class BaseBLEDevice {
         const savedId = localStorage.getItem("savedDeviceId");
         if (savedId) {
           this.connectedDeviceId = savedId;
+          this.isExplicitDisconnect = false; // Флаг ручного отключения сброшен
           this.connectNativeBLE(savedId);
         }
       } catch (e) {
         console.error("[JE Core] Ошибка инициализации BLE:", e);
+        // Если инициализация запнулась при старте, пробуем автоподключение через 2 секунды
+        const savedId = localStorage.getItem("savedDeviceId");
+        if (savedId) {
+          this.connectedDeviceId = savedId;
+          this.isExplicitDisconnect = false;
+          this.scheduleReconnect(2000);
+        }
       }
     }
 
@@ -131,7 +157,6 @@ class BaseBLEDevice {
       if (device && device.deviceId) {
         this.connectedDeviceId = device.deviceId;
 
-        // Очищаем имя от системных адресов или скобок, оставляем только чистое имя
         let devName = device.name || device.localName || "JE_Device";
         devName = devName.split('(')[0].trim();
 
