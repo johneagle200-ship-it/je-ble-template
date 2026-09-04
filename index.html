@@ -7,50 +7,56 @@
   <meta name="theme-color" content="#121212">
   <style>
     * { box-sizing: border-box; }
-    body { 
-      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; 
-      background: #121212; 
-      color: #fff; 
-      margin: 0; 
-      padding: 0; 
-      text-align: center; 
+    
+    html, body {
+      margin: 0;
+      padding: 0;
+      width: 100%;
+      height: 100%;
+      background: #121212;
+      color: #fff;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
     }
 
-    /* Верхняя панель прибора */
+    /* Верхняя панель на всю ширину экрана */
     .app-header {
       display: flex;
       justify-content: space-between;
       align-items: center;
-      padding: 12px 16px;
+      padding: 14px 16px;
       background: #1e1e1e;
       border-bottom: 1px solid #2a2a2a;
       width: 100%;
+      box-sizing: border-box;
     }
 
-    .header-title {
+    .header-left {
       display: flex;
       align-items: center;
-      gap: 8px;
-      white-space: nowrap;
+      gap: 10px;
     }
 
-    .header-title h2 { margin: 0; font-size: 16px; font-weight: 600; }
+    .header-left h2 { 
+      margin: 0; 
+      font-size: 18px; 
+      font-weight: 600; 
+    }
 
-    /* Бейдж версии в одну строку без переносов */
+    /* Бейдж версии */
     .ver-badge { 
       font-size: 11px; 
       background: #2a2a2a; 
       color: #00e676; 
-      padding: 2px 6px; 
-      border-radius: 8px; 
+      padding: 3px 8px; 
+      border-radius: 10px; 
       border: 1px solid #00e67644; 
       font-weight: bold; 
       white-space: nowrap;
       display: inline-block;
-      line-height: 1.2;
+      line-height: 1;
     }
 
-    /* Кнопка гамбургер строго в правом углу */
+    /* Кнопка гамбургер жестко прижата в правый угол */
     .menu-btn {
       position: relative;
       background: transparent;
@@ -59,12 +65,13 @@
       padding: 6px;
       display: flex;
       flex-direction: column;
-      gap: 4px;
+      gap: 5px;
       margin-left: auto;
+      z-index: 10;
     }
 
     .hamburger-line {
-      width: 22px;
+      width: 24px;
       height: 2px;
       background-color: #fff;
       border-radius: 2px;
@@ -74,54 +81,55 @@
       position: absolute;
       top: 2px;
       right: 2px;
-      width: 10px;
-      height: 10px;
+      width: 8px;
+      height: 8px;
       background-color: #ff3b30;
       border-radius: 50%;
-      border: 2px solid #1e1e1e;
     }
 
-    /* Главный рабочий экран */
+    /* Главный контейнер */
     .main-container { 
-      padding: 15px; 
-      padding-bottom: 80px; /* Отступ снизу под плавающую кнопку */
+      padding: 16px; 
+      padding-bottom: 90px;
+      text-align: center;
     }
 
     .card { 
       background: #1e1e1e; 
-      padding: 16px; 
-      border-radius: 12px; 
-      margin-bottom: 15px; 
-      box-shadow: 0 4px 10px rgba(0,0,0,0.3); 
+      padding: 18px; 
+      border-radius: 14px; 
+      margin-bottom: 16px; 
+      box-shadow: 0 4px 12px rgba(0,0,0,0.4); 
     }
 
-    .device-info { font-size: 14px; color: #aaa; margin-bottom: 6px; }
+    .device-info { font-size: 15px; color: #aaa; margin-bottom: 8px; }
     .status { font-weight: bold; color: #ff5252; }
     .status.connected { color: #00e676; }
     .status.pending { color: #ffca28; }
-    .val { font-size: 36px; font-weight: bold; color: #00e676; margin-top: 8px; }
+    .val { font-size: 38px; font-weight: bold; color: #00e676; margin-top: 10px; }
 
-    /* Нижняя плавающая панель (появляется только если НЕТ связи) */
+    /* Нижняя плавающая панель подключения */
     .bottom-bar {
       position: fixed;
       bottom: 0;
       left: 0;
       width: 100%;
-      padding: 15px;
+      padding: 16px;
       background: #181818;
       border-top: 1px solid #2a2a2a;
-      box-shadow: 0 -4px 15px rgba(0,0,0,0.5);
+      box-shadow: 0 -4px 20px rgba(0,0,0,0.6);
       z-index: 100;
+      box-sizing: border-box;
     }
 
-    /* Шторка меню */
+    /* Выпадающее боковое меню */
     .menu-drawer {
       position: fixed;
       top: 0;
       left: 0;
       width: 100vw;
       height: 100vh;
-      background: rgba(0, 0, 0, 0.7);
+      background: rgba(0, 0, 0, 0.75);
       z-index: 9999;
       display: flex;
       justify-content: flex-end;
@@ -133,10 +141,11 @@
       background: #1e1e1e;
       color: #fff;
       padding: 20px;
-      box-shadow: -4px 0 15px rgba(0, 0, 0, 0.5);
+      box-shadow: -4px 0 20px rgba(0, 0, 0, 0.6);
       display: flex;
       flex-direction: column;
       text-align: left;
+      box-sizing: border-box;
     }
 
     .menu-header {
@@ -144,28 +153,29 @@
       justify-content: space-between;
       align-items: center;
       border-bottom: 1px solid #333;
-      padding-bottom: 10px;
-      margin-bottom: 15px;
+      padding-bottom: 12px;
+      margin-bottom: 16px;
     }
 
-    .menu-header h3 { margin: 0; font-size: 16px; }
+    .menu-header h3 { margin: 0; font-size: 17px; }
 
     .btn-close {
       background: transparent;
       border: none;
       color: #aaa;
-      font-size: 24px;
+      font-size: 28px;
       cursor: pointer;
-      padding: 0;
+      line-height: 1;
+      padding: 0 4px;
     }
 
     .info-card {
       background: #2a2a2a;
-      padding: 12px;
-      border-radius: 8px;
+      padding: 12px 14px;
+      border-radius: 10px;
       font-size: 13px;
-      margin-bottom: 15px;
-      line-height: 1.6;
+      margin-bottom: 16px;
+      line-height: 1.7;
     }
 
     .info-card p { margin: 0; color: #ccc; }
@@ -175,8 +185,8 @@
       background: #2b2200;
       border: 1px solid #ffca28;
       padding: 12px;
-      border-radius: 8px;
-      margin-bottom: 15px;
+      border-radius: 10px;
+      margin-bottom: 16px;
     }
 
     .update-card p { margin: 0 0 10px 0; font-size: 13px; font-weight: bold; color: #ffca28; }
@@ -191,7 +201,7 @@
       background: #007bff; 
       color: white; 
       border: none; 
-      padding: 12px 16px; 
+      padding: 14px; 
       font-size: 15px; 
       font-weight: 600; 
       border-radius: 10px; 
@@ -202,20 +212,20 @@
     button.btn-danger { background: #dc3545; }
     button.btn-secondary { background: #3a3a3a; color: #eee; }
     button.btn-warning { background: #ff9800; color: #000; }
-    hr.divider { border: 0; height: 1px; background: #333; margin: 15px 0; }
+    hr.divider { border: 0; height: 1px; background: #333; margin: 16px 0; }
   </style>
 </head>
 <body>
 
-  <!-- Шапка -->
+  <!-- Верхняя панель -->
   <header class="app-header">
-    <div class="header-title">
+    <div class="header-left">
       <h2 id="appTitle">JE Device</h2>
       <span id="espFwVersion" class="ver-badge">v--</span>
     </div>
 
-    <!-- Кнопка вызова настроек -->
-    <button id="btnMenu" class="menu-btn" onclick="app.toggleMenu()">
+    <!-- Кнопка вызова меню (прижата вправо) -->
+    <button id="btnMenu" class="menu-btn" onclick="toggleMenu()">
       <div class="hamburger-line"></div>
       <div class="hamburger-line"></div>
       <div class="hamburger-line"></div>
@@ -223,7 +233,7 @@
     </button>
   </header>
 
-  <!-- Рабочая область -->
+  <!-- Главный экран -->
   <main class="main-container">
     <div class="card">
       <div class="device-info">
@@ -232,24 +242,23 @@
       <div>Статус: <span id="bleStatus" class="status">Отключено</span></div>
     </div>
 
-    <!-- Карточка с данными телеметрии -->
     <div class="card">
       <div style="color: #aaa; font-size: 14px;">Данные с ESP32:</div>
       <div id="telemetryData" class="val">--</div>
     </div>
   </main>
 
-  <!-- Нижняя кнопка (появляется только в состоянии "Отключено") -->
+  <!-- Нижняя плавающая кнопка подключения -->
   <div id="bottomConnectBar" class="bottom-bar">
     <button id="btnConnect" onclick="app.connectOrReconnect()">Подключиться</button>
   </div>
 
-  <!-- Боковое меню -->
+  <!-- Шторка меню -->
   <div id="settingsMenu" class="menu-drawer" style="display: none;">
     <div class="menu-content">
       <div class="menu-header">
         <h3>Настройки и Система</h3>
-        <button class="btn-close" onclick="app.toggleMenu()">&times;</button>
+        <button class="btn-close" onclick="toggleMenu()">&times;</button>
       </div>
 
       <div class="info-card">
@@ -258,7 +267,6 @@
         <p>Связь: <strong id="bleStatusInMenu">Отключено</strong></p>
       </div>
 
-      <!-- Блок обновлений -->
       <div id="updateNotice" class="update-card" style="display: none;">
         <p id="updateNoticeText">Обнаружено обновление!</p>
         <div class="btn-group-vertical">
@@ -267,18 +275,26 @@
         </div>
       </div>
 
-      <!-- Системные функции -->
       <div class="btn-group-vertical">
-        <button id="btnCheckUpdates" class="btn-secondary" onclick="app.manualCheckUpdates()">Проверить обновления</button>
-        <button id="btnSelectNew" onclick="app.selectNewDevice()" class="btn-secondary">Сменить устройство</button>
+        <button id="btnCheckUpdates" class="btn-secondary" onclick="app.checkForUpdates()">Проверить обновления</button>
+        <button id="btnSelectNew" class="btn-secondary" onclick="app.selectNewDevice(); toggleMenu();">Сменить устройство</button>
         
         <hr class="divider">
 
-        <!-- Отключение уходит в глубокое меню -->
-        <button id="btnDisconnect" onclick="app.disconnectBLE()" style="display: none;" class="btn-danger">Отключить устройство</button>
+        <button id="btnDisconnect" class="btn-danger" style="display: none;" onclick="app.disconnectBLE(); toggleMenu();">Отключить устройство</button>
       </div>
     </div>
   </div>
+
+  <script>
+    // Прямой метод открытия/закрытия меню
+    function toggleMenu() {
+      const menu = document.getElementById('settingsMenu');
+      if (menu) {
+        menu.style.display = (menu.style.display === 'none' || !menu.style.display) ? 'flex' : 'none';
+      }
+    }
+  </script>
 
   <script src="BaseBLEDevice.js"></script>
   <script src="app.js"></script>
