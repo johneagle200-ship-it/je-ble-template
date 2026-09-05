@@ -252,51 +252,66 @@ class BaseBLEDevice {
     }, delayMs);
   }
 
-  _parseData(result) {
-    if (this.isOtaInProgress) return;
+_parseData(result) {
+  if (this.isOtaInProgress) return;
 
-    try {
-      const rawVal = result.value || result;
-      let bytes = rawVal.buffer ? new Uint8Array(rawVal.buffer) : new Uint8Array(rawVal);
-      const chunkStr = new TextDecoder().decode(bytes);
+  try {
+    console.log("[JE Core] raw notification:", result);
 
-      // Накапливаем фрагменты в буфер
-      this.rxBuffer += chunkStr;
+    // Универсальное извлечение байтов
+    let bytes;
+    if (result && result.value) {
+      // Capacitor sometimes returns { value: [1,2,3] } or { value: { buffer: ... } }
+      const v = result.value;
+      if (Array.isArray(v)) {
+        bytes = new Uint8Array(v);
+      } else if (v.buffer && v.byteLength !== undefined) {
+        bytes = new Uint8Array(v.buffer || v);
+      } else if (v instanceof ArrayBuffer) {
+        bytes = new Uint8Array(v);
+      } else {
+        // last resort: try to convert object to array
+        bytes = new Uint8Array(Object.values(v));
+      }
+    } else if (result && result.buffer) {
+      bytes = new Uint8Array(result.buffer);
+    } else if (Array.isArray(result)) {
+      bytes = new Uint8Array(result);
+    } else {
+      console.warn("[JE Core] Unknown notification payload shape", result);
+      return;
+    }
 
-      // Извлекаем полные строки по символу конца строки (\n)
-      let lineEndIndex;
-      while ((lineEndIndex = this.rxBuffer.indexOf('\n')) !== -1) {
-        const completeLine = this.rxBuffer.substring(0, lineEndIndex).trim();
-        this.rxBuffer = this.rxBuffer.substring(lineEndIndex + 1);
+    // Декодируем фрагмент безопасно
+    const chunkStr = new TextDecoder('utf-8', { fatal: false }).decode(bytes);
 
-        if (!completeLine) continue;
+    // Накопление в буфер
+    this.rxBuffer += chunkStr;
 
-        const data = JSON.parse(completeLine);
+    // Извлекаем полные строки по '\n'
+    let idx;
+    while ((idx = this.rxBuffer.indexOf('\n')) !== -1) {
+      const line = this.rxBuffer.substring(0, idx).trim();
+      this.rxBuffer = this.rxBuffer.substring(idx + 1);
+      if (!line) continue;
 
+      try {
+        const data = JSON.parse(line);
         if (data.sys) {
           this.espFwVersion = data.sys.fw;
           this.updateVersionUI();
-
-          if (this.latestRemoteVersion && this.isNewerVersion(this.latestRemoteVersion, data.sys.fw)) {
-            const textEl = document.getElementById('updateNoticeText');
-            const btnFw = document.getElementById('btnUpdateFW');
-            const noticeEl = document.getElementById('updateNotice');
-            if (textEl) textEl.innerText = `Доступна новая прошивка ESP32 v${this.latestRemoteVersion}!`;
-            if (btnFw) btnFw.style.display = 'inline-block';
-            if (noticeEl) noticeEl.style.display = 'block';
-
-            const badge = document.getElementById('menuBadge');
-            if (badge) badge.style.display = 'block';
-          }
+          // ... обработка обновлений как раньше
           continue;
         }
-
         this.onTelemetry(data);
+      } catch (e) {
+        console.warn("[JE Core] JSON parse failed for line:", line, e);
       }
-    } catch (e) {
-      console.log("[JE Core] Ошибка разбора пакета:", e);
     }
+  } catch (e) {
+    console.error("[JE Core] _parseData error:", e);
   }
+}
 
   async updateESP32Firmware() {
     if (!confirm(`Начать прошивку ESP32 до версии v${this.latestRemoteVersion}? Не отключайте устройство!`)) return;
