@@ -57,24 +57,24 @@ jobs:
           cp ~/.android/debug.keystore android/app/debug.keystore
           sed -i "s/versionCode 1/versionCode ${GITHUB_RUN_NUMBER}/g" android/app/build.gradle
           python3 -c '
-with open("android/app/build.gradle", "r") as f:
-    content = f.read()
+          with open("android/app/build.gradle", "r") as f:
+              content = f.read()
 
-config = """
-    signingConfigs {
-        debug {
-            storeFile file("debug.keystore")
-            storePassword "android"
-            keyAlias "androiddebugkey"
-            keyPassword "android"
-        }
-    }"""
+          config = """
+              signingConfigs {
+                  debug {
+                      storeFile file("debug.keystore")
+                      storePassword "android"
+                      keyAlias "androiddebugkey"
+                      keyPassword "android"
+                  }
+              }"""
 
-if "storeFile file" not in content:
-    content = content.replace("buildTypes {", config + "\n    buildTypes {")
-    with open("android/app/build.gradle", "w") as f:
-        f.write(content)
-'
+          if "storeFile file" not in content:
+              content = content.replace("buildTypes {", config + "\n    buildTypes {")
+              with open("android/app/build.gradle", "w") as f:
+                  f.write(content)
+          '
 
       - name: Build APK with Gradle
         run: |
