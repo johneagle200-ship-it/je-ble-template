@@ -15,7 +15,8 @@ class BaseBLEDevice {
     this.isExplicitDisconnect = false;
     this.reconnectTimer = null;
     this.isOtaInProgress = false;
-    this.rxBuffer = ""; // Буфер для склейки фрагментов BLE-пакетов
+    
+    this.rxBuffer = ""; // Буфер для сборки фрагментов BLE-пакетов
 
     this.BluetoothLe = window.Capacitor?.Plugins?.BluetoothLe || (typeof Capacitor !== 'undefined' ? Capacitor.Plugins.BluetoothLe : null);
   }
@@ -172,7 +173,6 @@ class BaseBLEDevice {
       clearTimeout(this.reconnectTimer);
       this.updateUI("connecting");
 
-      // Системный диалог поиска и выбора устройств
       const result = await this.BluetoothLe.requestDevice({
         displayUnconnected: true
       });
@@ -210,6 +210,9 @@ class BaseBLEDevice {
     try {
       clearTimeout(this.reconnectTimer);
       this.updateUI("connecting");
+
+      // Сбрасываем буфер при новом подключении
+      this.rxBuffer = "";
 
       await this.BluetoothLe.connect({ deviceId });
       await this.BluetoothLe.startNotifications({
@@ -253,31 +256,14 @@ class BaseBLEDevice {
     if (this.isOtaInProgress) return;
 
     try {
-      // 1. Извлекаем данные с учетом всех типов данных Capacitor BLE (DataView, Array, Base64)
-      const rawVal = result?.value !== undefined ? result.value : result;
-      let bytes;
-
-      if (rawVal instanceof DataView) {
-        bytes = new Uint8Array(rawVal.buffer, rawVal.byteOffset, rawVal.byteLength);
-      } else if (rawVal && rawVal.buffer instanceof ArrayBuffer) {
-        bytes = new Uint8Array(rawVal.buffer, rawVal.byteOffset || 0, rawVal.byteLength || rawVal.buffer.byteLength);
-      } else if (typeof rawVal === 'string') {
-        const binaryString = atob(rawVal);
-        bytes = new Uint8Array(binaryString.length);
-        for (let i = 0; i < binaryString.length; i++) {
-          bytes[i] = binaryString.charCodeAt(i);
-        }
-      } else if (Array.isArray(rawVal)) {
-        bytes = new Uint8Array(rawVal);
-      } else {
-        return;
-      }
-
-      // 2. Декодируем байты в строку и добавляем в накопленный буфер
+      const rawVal = result.value || result;
+      let bytes = rawVal.buffer ? new Uint8Array(rawVal.buffer) : new Uint8Array(rawVal);
       const chunkStr = new TextDecoder().decode(bytes);
+
+      // Накапливаем фрагменты в буфер
       this.rxBuffer += chunkStr;
 
-      // 3. Разбираем буфер по символу перевода строки \n
+      // Извлекаем полные строки по символу конца строки (\n)
       let lineEndIndex;
       while ((lineEndIndex = this.rxBuffer.indexOf('\n')) !== -1) {
         const completeLine = this.rxBuffer.substring(0, lineEndIndex).trim();
@@ -285,16 +271,8 @@ class BaseBLEDevice {
 
         if (!completeLine) continue;
 
-        // 4. Изолированный парсинг JSON пакета
-        let data;
-        try {
-          data = JSON.parse(completeLine);
-        } catch (jsonErr) {
-          console.warn("[JE Core] Некорректный JSON пакет:", completeLine);
-          continue; // Пропускаем битую строку и продолжаем разбирать буфер
-        }
+        const data = JSON.parse(completeLine);
 
-        // Обработка системных пакетов
         if (data.sys) {
           this.espFwVersion = data.sys.fw;
           this.updateVersionUI();
@@ -313,40 +291,10 @@ class BaseBLEDevice {
           continue;
         }
 
-        // Передача данных телеметрии в переопределенный метод класса MainApp
         this.onTelemetry(data);
       }
     } catch (e) {
-      console.error("[JE Core] Критическая ошибка приема пакета:", e);
-    }
-  }
-
-  // Конвертация Uint8Array в Base64 для передачи в Capacitor BluetoothLe
-  _uint8ToBase64(bytes) {
-    let binary = '';
-    const len = bytes.byteLength;
-    for (let i = 0; i < len; i++) {
-      binary += String.fromCharCode(bytes[i]);
-    }
-    return btoa(binary);
-  }
-
-  async sendCmd(cmd) {
-    if (!this.connectedDeviceId || !this.BluetoothLe) return;
-    try {
-      // Гарантируем перенос строки \n в конце для потокового парсинга на ESP32
-      const formattedCmd = cmd.endsWith('\n') ? cmd : cmd + '\n';
-      const bytes = new TextEncoder().encode(formattedCmd);
-      const base64Value = this._uint8ToBase64(bytes);
-
-      await this.BluetoothLe.write({
-        deviceId: this.connectedDeviceId,
-        service: this.serviceUuid,
-        characteristic: this.rxUuid,
-        value: base64Value
-      });
-    } catch (e) {
-      console.error("[JE Core] Ошибка отправки команды:", e);
+      console.log("[JE Core] Ошибка разбора пакета:", e);
     }
   }
 
@@ -368,18 +316,16 @@ class BaseBLEDevice {
       await this.sendCmd(JSON.stringify({ cmd: "OTA_START", size: bytes.length }));
       await new Promise(r => setTimeout(r, 1000));
 
-      const chunkSize = 180; // Оптимальный безопасный размер BLE чанка
+      const chunkSize = 200;
       const total = bytes.length;
 
       for (let offset = 0; offset < total; offset += chunkSize) {
         const chunk = bytes.slice(offset, offset + chunkSize);
-        const base64Chunk = this._uint8ToBase64(chunk);
-
         await this.BluetoothLe.write({
           deviceId: this.connectedDeviceId,
           service: this.serviceUuid,
           characteristic: this.rxUuid,
-          value: base64Chunk
+          value: Array.from(chunk)
         });
 
         let percent = Math.round((offset / total) * 100);
@@ -396,6 +342,19 @@ class BaseBLEDevice {
       this.isOtaInProgress = false;
       this.updateUI("connected");
     }
+  }
+
+  async sendCmd(cmd) {
+    if (!this.connectedDeviceId) return;
+    try {
+      const numbers = Array.from(new TextEncoder().encode(cmd));
+      await this.BluetoothLe.write({
+        deviceId: this.connectedDeviceId,
+        service: this.serviceUuid,
+        characteristic: this.rxUuid,
+        value: numbers
+      });
+    } catch (e) {}
   }
 
   onTelemetry(data) {}
