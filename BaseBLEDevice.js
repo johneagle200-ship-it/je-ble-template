@@ -211,30 +211,17 @@ class BaseBLEDevice {
       clearTimeout(this.reconnectTimer);
       this.updateUI("connecting");
 
-      // 1. Устанавливаем BLE подключение
       await this.BluetoothLe.connect({ deviceId });
-
-      // Пауза 300мс для стабилизации GATT-таблицы на мобильном устройстве
-      await new Promise(r => setTimeout(r, 300));
-
-      // 2. Включаем уведомления с асинхронным вызовом парсера
       await this.BluetoothLe.startNotifications({
         deviceId,
         service: this.serviceUuid,
         characteristic: this.txUuid
-      }, (result) => {
-        // Асинхронный вызов, чтобы не блокировать нативный поток плагина
-        setTimeout(() => this._parseData(result), 0);
-      });
+      }, (result) => this._parseData(result));
 
       this.updateUI("connected");
-
-      // Пауза 500мс, чтобы запись CCCD успела подтвердиться на ESP32 перед отправкой данных
-      await new Promise(r => setTimeout(r, 500));
-      await this.sendCmd(JSON.stringify({ cmd: "get_sys" }));
+      this.sendCmd(JSON.stringify({ cmd: "get_sys" }));
 
     } catch (err) {
-      console.error("[JE Core] Ошибка подключения BLE:", err);
       if (!this.isExplicitDisconnect) {
         this.updateUI("reconnecting");
         this.scheduleReconnect(3000);
@@ -263,12 +250,11 @@ class BaseBLEDevice {
   }
 
   _parseData(result) {
-    if (this.isOtaInProgress || !result) return;
+    if (this.isOtaInProgress) return;
 
     try {
+      // 1. Извлекаем данные с учетом всех типов данных Capacitor BLE (DataView, Array, Base64)
       const rawVal = result?.value !== undefined ? result.value : result;
-      if (!rawVal) return;
-
       let bytes;
 
       if (rawVal instanceof DataView) {
@@ -276,14 +262,10 @@ class BaseBLEDevice {
       } else if (rawVal && rawVal.buffer instanceof ArrayBuffer) {
         bytes = new Uint8Array(rawVal.buffer, rawVal.byteOffset || 0, rawVal.byteLength || rawVal.buffer.byteLength);
       } else if (typeof rawVal === 'string') {
-        try {
-          const binaryString = atob(rawVal);
-          bytes = new Uint8Array(binaryString.length);
-          for (let i = 0; i < binaryString.length; i++) {
-            bytes[i] = binaryString.charCodeAt(i);
-          }
-        } catch (b64Err) {
-          bytes = new TextEncoder().encode(rawVal);
+        const binaryString = atob(rawVal);
+        bytes = new Uint8Array(binaryString.length);
+        for (let i = 0; i < binaryString.length; i++) {
+          bytes[i] = binaryString.charCodeAt(i);
         }
       } else if (Array.isArray(rawVal)) {
         bytes = new Uint8Array(rawVal);
@@ -291,9 +273,11 @@ class BaseBLEDevice {
         return;
       }
 
-      const chunkStr = new TextDecoder("utf-8", { fatal: false }).decode(bytes);
+      // 2. Декодируем байты в строку и добавляем в накопленный буфер
+      const chunkStr = new TextDecoder().decode(bytes);
       this.rxBuffer += chunkStr;
 
+      // 3. Разбираем буфер по символу перевода строки \n
       let lineEndIndex;
       while ((lineEndIndex = this.rxBuffer.indexOf('\n')) !== -1) {
         const completeLine = this.rxBuffer.substring(0, lineEndIndex).trim();
@@ -301,14 +285,16 @@ class BaseBLEDevice {
 
         if (!completeLine) continue;
 
+        // 4. Изолированный парсинг JSON пакета
         let data;
         try {
           data = JSON.parse(completeLine);
         } catch (jsonErr) {
           console.warn("[JE Core] Некорректный JSON пакет:", completeLine);
-          continue;
+          continue; // Пропускаем битую строку и продолжаем разбирать буфер
         }
 
+        // Обработка системных пакетов
         if (data.sys) {
           this.espFwVersion = data.sys.fw;
           this.updateVersionUI();
@@ -327,14 +313,15 @@ class BaseBLEDevice {
           continue;
         }
 
+        // Передача данных телеметрии в переопределенный метод класса MainApp
         this.onTelemetry(data);
       }
     } catch (e) {
-      console.error("[JE Core] Ошибка в _parseData:", e);
+      console.error("[JE Core] Критическая ошибка приема пакета:", e);
     }
   }
 
-  // Конвертация Uint8Array в Base64 для безопасной передачи в Capacitor BluetoothLe
+  // Конвертация Uint8Array в Base64 для передачи в Capacitor BluetoothLe
   _uint8ToBase64(bytes) {
     let binary = '';
     const len = bytes.byteLength;
@@ -347,6 +334,7 @@ class BaseBLEDevice {
   async sendCmd(cmd) {
     if (!this.connectedDeviceId || !this.BluetoothLe) return;
     try {
+      // Гарантируем перенос строки \n в конце для потокового парсинга на ESP32
       const formattedCmd = cmd.endsWith('\n') ? cmd : cmd + '\n';
       const bytes = new TextEncoder().encode(formattedCmd);
       const base64Value = this._uint8ToBase64(bytes);
@@ -380,7 +368,7 @@ class BaseBLEDevice {
       await this.sendCmd(JSON.stringify({ cmd: "OTA_START", size: bytes.length }));
       await new Promise(r => setTimeout(r, 1000));
 
-      const chunkSize = 180;
+      const chunkSize = 180; // Оптимальный безопасный размер BLE чанка
       const total = bytes.length;
 
       for (let offset = 0; offset < total; offset += chunkSize) {
