@@ -31,7 +31,9 @@ jobs:
           KEYSTORE_BASE64: ${{ secrets.DEBUG_KEYSTORE_BASE64 }}
         run: |
           mkdir -p ~/.android
-          echo "$KEYSTORE_BASE64" | base64 -d > ~/.android/debug.keystore
+          mkdir -p android/app
+          echo "$KEYSTORE_BASE64" | tr -d '\r\n' | base64 -d > ~/.android/debug.keystore
+          cp ~/.android/debug.keystore android/app/debug.keystore
 
       - name: Install Dependencies
         run: npm install
@@ -54,9 +56,18 @@ jobs:
 
       - name: Configure Android Signing & Version Code
         run: |
-          mkdir -p android/app
-          cp ~/.android/debug.keystore android/app/debug.keystore
           sed -i 's/versionCode 1/versionCode '${GITHUB_RUN_NUMBER}'/g' android/app/build.gradle
+          node -e '
+            const fs = require("fs");
+            let content = fs.readFileSync("android/app/build.gradle", "utf8");
+            if (!content.includes("storeFile file(\"debug.keystore\")")) {
+              content = content.replace(
+                /buildTypes\s*\{/,
+                `signingConfigs {\n        debug {\n            storeFile file("debug.keystore")\n            storePassword "android"\n            keyAlias "androiddebugkey"\n            keyPassword "android"\n        }\n    }\n    buildTypes {`
+              );
+              fs.writeFileSync("android/app/build.gradle", content);
+            }
+          '
 
       - name: Build APK with Gradle
         run: |
