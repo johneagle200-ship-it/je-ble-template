@@ -249,7 +249,7 @@ class BaseBLEDevice {
     }, delayMs);
   }
 
-_parseData(result) {
+  _parseData(result) {
     if (this.isOtaInProgress) return;
 
     try {
@@ -320,7 +320,36 @@ _parseData(result) {
       console.error("[JE Core] Критическая ошибка приема пакета:", e);
     }
   }
-  
+
+  // Конвертация Uint8Array в Base64 для передачи в Capacitor BluetoothLe
+  _uint8ToBase64(bytes) {
+    let binary = '';
+    const len = bytes.byteLength;
+    for (let i = 0; i < len; i++) {
+      binary += String.fromCharCode(bytes[i]);
+    }
+    return btoa(binary);
+  }
+
+  async sendCmd(cmd) {
+    if (!this.connectedDeviceId || !this.BluetoothLe) return;
+    try {
+      // Гарантируем перенос строки \n в конце для потокового парсинга на ESP32
+      const formattedCmd = cmd.endsWith('\n') ? cmd : cmd + '\n';
+      const bytes = new TextEncoder().encode(formattedCmd);
+      const base64Value = this._uint8ToBase64(bytes);
+
+      await this.BluetoothLe.write({
+        deviceId: this.connectedDeviceId,
+        service: this.serviceUuid,
+        characteristic: this.rxUuid,
+        value: base64Value
+      });
+    } catch (e) {
+      console.error("[JE Core] Ошибка отправки команды:", e);
+    }
+  }
+
   async updateESP32Firmware() {
     if (!confirm(`Начать прошивку ESP32 до версии v${this.latestRemoteVersion}? Не отключайте устройство!`)) return;
 
@@ -339,16 +368,18 @@ _parseData(result) {
       await this.sendCmd(JSON.stringify({ cmd: "OTA_START", size: bytes.length }));
       await new Promise(r => setTimeout(r, 1000));
 
-      const chunkSize = 200;
+      const chunkSize = 180; // Оптимальный безопасный размер BLE чанка
       const total = bytes.length;
 
       for (let offset = 0; offset < total; offset += chunkSize) {
         const chunk = bytes.slice(offset, offset + chunkSize);
+        const base64Chunk = this._uint8ToBase64(chunk);
+
         await this.BluetoothLe.write({
           deviceId: this.connectedDeviceId,
           service: this.serviceUuid,
           characteristic: this.rxUuid,
-          value: Array.from(chunk)
+          value: base64Chunk
         });
 
         let percent = Math.round((offset / total) * 100);
@@ -365,19 +396,6 @@ _parseData(result) {
       this.isOtaInProgress = false;
       this.updateUI("connected");
     }
-  }
-
-  async sendCmd(cmd) {
-    if (!this.connectedDeviceId) return;
-    try {
-      const numbers = Array.from(new TextEncoder().encode(cmd));
-      await this.BluetoothLe.write({
-        deviceId: this.connectedDeviceId,
-        service: this.serviceUuid,
-        characteristic: this.rxUuid,
-        value: numbers
-      });
-    } catch (e) {}
   }
 
   onTelemetry(data) {}
