@@ -1,6 +1,6 @@
 {
   "name": "je-ble-template",
-  "version": "1.0.5",
+  "version": "1.0.6",
   "description": "Universal Base Template for JE BLE Devices",
   "scripts": {
     "build": "echo 'No build step required'"
