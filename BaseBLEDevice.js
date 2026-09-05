@@ -249,18 +249,35 @@ class BaseBLEDevice {
     }, delayMs);
   }
 
-  _parseData(result) {
+_parseData(result) {
     if (this.isOtaInProgress) return;
 
     try {
-      const rawVal = result.value || result;
-      let bytes = rawVal.buffer ? new Uint8Array(rawVal.buffer) : new Uint8Array(rawVal);
+      // 1. Извлекаем данные с учетом всех типов данных Capacitor BLE (DataView, Array, Base64)
+      const rawVal = result?.value !== undefined ? result.value : result;
+      let bytes;
+
+      if (rawVal instanceof DataView) {
+        bytes = new Uint8Array(rawVal.buffer, rawVal.byteOffset, rawVal.byteLength);
+      } else if (rawVal && rawVal.buffer instanceof ArrayBuffer) {
+        bytes = new Uint8Array(rawVal.buffer, rawVal.byteOffset || 0, rawVal.byteLength || rawVal.buffer.byteLength);
+      } else if (typeof rawVal === 'string') {
+        const binaryString = atob(rawVal);
+        bytes = new Uint8Array(binaryString.length);
+        for (let i = 0; i < binaryString.length; i++) {
+          bytes[i] = binaryString.charCodeAt(i);
+        }
+      } else if (Array.isArray(rawVal)) {
+        bytes = new Uint8Array(rawVal);
+      } else {
+        return;
+      }
+
+      // 2. Декодируем байты в строку и добавляем в накопленный буфер
       const chunkStr = new TextDecoder().decode(bytes);
-      
-      // Накапливаем куски в буфер
       this.rxBuffer += chunkStr;
 
-      // Ищем разделитель строк (\n), которым ESP32 завершает отправку JSON
+      // 3. Разбираем буфер по символу перевода строки \n
       let lineEndIndex;
       while ((lineEndIndex = this.rxBuffer.indexOf('\n')) !== -1) {
         const completeLine = this.rxBuffer.substring(0, lineEndIndex).trim();
@@ -268,8 +285,16 @@ class BaseBLEDevice {
 
         if (!completeLine) continue;
 
-        const data = JSON.parse(completeLine);
+        // 4. Изолированный парсинг JSON пакета
+        let data;
+        try {
+          data = JSON.parse(completeLine);
+        } catch (jsonErr) {
+          console.warn("[JE Core] Некорректный JSON пакет:", completeLine);
+          continue; // Пропускаем битую строку и продолжаем разбирать буфер
+        }
 
+        // Обработка системных пакетов
         if (data.sys) {
           this.espFwVersion = data.sys.fw;
           this.updateVersionUI();
@@ -288,13 +313,14 @@ class BaseBLEDevice {
           continue;
         }
 
+        // Передача данных телеметрии в переопределенный метод класса MainApp
         this.onTelemetry(data);
       }
     } catch (e) {
-      console.log("[JE Core] Ошибка парсинга пакета:", e);
+      console.error("[JE Core] Критическая ошибка приема пакета:", e);
     }
   }
-
+  
   async updateESP32Firmware() {
     if (!confirm(`Начать прошивку ESP32 до версии v${this.latestRemoteVersion}? Не отключайте устройство!`)) return;
 
