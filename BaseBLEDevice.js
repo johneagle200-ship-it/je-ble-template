@@ -15,6 +15,7 @@ class BaseBLEDevice {
     this.isExplicitDisconnect = false;
     this.reconnectTimer = null;
     this.isOtaInProgress = false;
+    this.rxBuffer = ""; // Буфер для склейки фрагментов BLE-пакетов
 
     this.BluetoothLe = window.Capacitor?.Plugins?.BluetoothLe || (typeof Capacitor !== 'undefined' ? Capacitor.Plugins.BluetoothLe : null);
   }
@@ -254,29 +255,44 @@ class BaseBLEDevice {
     try {
       const rawVal = result.value || result;
       let bytes = rawVal.buffer ? new Uint8Array(rawVal.buffer) : new Uint8Array(rawVal);
-      const jsonStr = new TextDecoder().decode(bytes);
-      const data = JSON.parse(jsonStr);
+      const chunkStr = new TextDecoder().decode(bytes);
+      
+      // Накапливаем куски в буфер
+      this.rxBuffer += chunkStr;
 
-      if (data.sys) {
-        this.espFwVersion = data.sys.fw;
-        this.updateVersionUI();
+      // Ищем разделитель строк (\n), которым ESP32 завершает отправку JSON
+      let lineEndIndex;
+      while ((lineEndIndex = this.rxBuffer.indexOf('\n')) !== -1) {
+        const completeLine = this.rxBuffer.substring(0, lineEndIndex).trim();
+        this.rxBuffer = this.rxBuffer.substring(lineEndIndex + 1);
 
-        if (this.latestRemoteVersion && this.isNewerVersion(this.latestRemoteVersion, data.sys.fw)) {
-          const textEl = document.getElementById('updateNoticeText');
-          const btnFw = document.getElementById('btnUpdateFW');
-          const noticeEl = document.getElementById('updateNotice');
-          if (textEl) textEl.innerText = `Доступна новая прошивка ESP32 v${this.latestRemoteVersion}!`;
-          if (btnFw) btnFw.style.display = 'inline-block';
-          if (noticeEl) noticeEl.style.display = 'block';
+        if (!completeLine) continue;
 
-          const badge = document.getElementById('menuBadge');
-          if (badge) badge.style.display = 'block';
+        const data = JSON.parse(completeLine);
+
+        if (data.sys) {
+          this.espFwVersion = data.sys.fw;
+          this.updateVersionUI();
+
+          if (this.latestRemoteVersion && this.isNewerVersion(this.latestRemoteVersion, data.sys.fw)) {
+            const textEl = document.getElementById('updateNoticeText');
+            const btnFw = document.getElementById('btnUpdateFW');
+            const noticeEl = document.getElementById('updateNotice');
+            if (textEl) textEl.innerText = `Доступна новая прошивка ESP32 v${this.latestRemoteVersion}!`;
+            if (btnFw) btnFw.style.display = 'inline-block';
+            if (noticeEl) noticeEl.style.display = 'block';
+
+            const badge = document.getElementById('menuBadge');
+            if (badge) badge.style.display = 'block';
+          }
+          continue;
         }
-        return;
-      }
 
-      this.onTelemetry(data);
-    } catch (e) {}
+        this.onTelemetry(data);
+      }
+    } catch (e) {
+      console.log("[JE Core] Ошибка парсинга пакета:", e);
+    }
   }
 
   async updateESP32Firmware() {
