@@ -25,7 +25,7 @@ class BaseBLEDevice {
     this.valueListener = null;
     this.BluetoothLe = window.Capacitor?.Plugins?.BluetoothLe || (typeof Capacitor !== 'undefined' ? Capacitor.Plugins.BluetoothLe : null);
 
-    console.log("[JE Core] Инициализирован экзeмпляр BaseBLEDevice", {
+    console.log("[JE Core] Инициализирован экземпляр BaseBLEDevice", {
       repoOwner: this.repoOwner,
       repoName: this.repoName,
       appVersion: this.currentAppVersion
@@ -40,9 +40,19 @@ class BaseBLEDevice {
     if (this.BluetoothLe) {
       try {
         console.log("[JE Core] Инициализация и запрос разрешений Capacitor BluetoothLe...");
-        await this.BluetoothLe.initialize();
-        await this.BluetoothLe.requestPermissions();
-        console.log("[JE Core] Разрешения BLE успешно получены");
+        
+        try {
+          await this.BluetoothLe.initialize();
+        } catch (initErr) {
+          console.warn("[JE Core] Предупреждение initialize (уже инициализирован или не требуется):", initErr);
+        }
+
+        try {
+          await this.BluetoothLe.requestPermissions();
+          console.log("[JE Core] Разрешения BLE успешно запрошены");
+        } catch (permErr) {
+          console.warn("[JE Core] Предупреждение requestPermissions:", permErr);
+        }
 
         await new Promise(r => setTimeout(r, 500));
 
@@ -252,7 +262,6 @@ class BaseBLEDevice {
       console.log(`[JE Core] Соединение с BLE устройством ${deviceId}...`);
       this.updateUI("connecting");
 
-      // Сброс накопительного буфера при новом подключении
       this.rxBuffer = "";
       this.streamDecoder = new TextDecoder('utf-8');
       this.currentMtu = 23;
@@ -261,7 +270,6 @@ class BaseBLEDevice {
       await this.BluetoothLe.connect({ deviceId });
       console.log(`[JE Core] Физическое BLE соединение с ${deviceId} установлено!`);
 
-      // Запрос на увеличение MTU до 247 байт
       try {
         console.log("[JE Core] Запрос на увеличение MTU до 247...");
         const mtuRes = await this.BluetoothLe.requestMtu({ deviceId, mtu: 247 });
@@ -275,7 +283,6 @@ class BaseBLEDevice {
 
       await new Promise(r => setTimeout(r, 300));
 
-      // 1. Регистрируем слушатель входящих данных от характеристик
       if (!this.valueListener) {
         console.log("[JE Core] Регистрация глобального слушателя 'characteristicValueReceived'...");
         this.valueListener = await this.BluetoothLe.addListener(
@@ -284,7 +291,6 @@ class BaseBLEDevice {
         );
       }
 
-      // 2. Включаем подписку на notifications для TX характеристики
       try {
         console.log(`[JE Core] Остановка предыдущих подписок TX (${this.txUuid})...`);
         await this.BluetoothLe.stopNotifications({
@@ -355,9 +361,6 @@ class BaseBLEDevice {
     }, delayMs);
   }
 
-  /**
-   * Универсальный потоковый парсер входящего BLE-трафика с детальной трассировкой
-   */
   _parseData(result) {
     if (this.isOtaInProgress || !result) return;
 
@@ -367,7 +370,6 @@ class BaseBLEDevice {
 
       let bytes;
 
-      // Приведение любых типов данных от разных плагинов к Uint8Array
       if (rawVal instanceof Uint8Array) {
         bytes = rawVal;
       } else if (rawVal instanceof DataView) {
@@ -393,20 +395,17 @@ class BaseBLEDevice {
         return;
       }
 
-      // Потоковое декодирование в UTF-8 string
       const chunkStr = this.streamDecoder.decode(bytes, { stream: true });
       this.rxBuffer += chunkStr;
 
       console.log(`[JE Core] [RX Chunk] Получено ${bytes.length} байт -> "${chunkStr.replace(/\n/g, '\\n').replace(/\r/g, '\\r')}" | Буфер (${this.rxBuffer.length}/${this.maxBufferSize})`);
 
-      // Защита от переполнения
       if (this.rxBuffer.length > this.maxBufferSize) {
         console.warn(`[JE Core] Превышен защитный лимит буфера (${this.maxBufferSize} симв.), сброс накопленных данных!`);
         this.rxBuffer = "";
         return;
       }
 
-      // Выделение готовых пакетов по разделителю \n
       let idx;
       while ((idx = this.rxBuffer.indexOf('\n')) !== -1) {
         const line = this.rxBuffer.substring(0, idx).trim();
@@ -419,14 +418,12 @@ class BaseBLEDevice {
           const data = JSON.parse(line);
           console.log("[JE Core] [JSON Parsed] Успешно распарсен пакет:", data);
 
-          // 1. Системный пакет
           if (data.sys) {
             this.espFwVersion = typeof data.sys === 'object' ? data.sys.fw : data.sys;
             console.log(`[JE Core] Получена версия прошивки ESP32: v${this.espFwVersion}`);
             this.updateVersionUI();
           }
 
-          // 2. Передача всех данных в пользовательский обработчик
           if (typeof this.onTelemetry === 'function') {
             this.onTelemetry(data);
           }
@@ -440,7 +437,73 @@ class BaseBLEDevice {
     }
   }
 
-async sendCmd(cmd) {
+  /**
+   * Низкоуровневая отправка опций с авто-выбором метода (write / writeWithoutResponse)
+   */
+  async _writeRaw(options) {
+    try {
+      await this.BluetoothLe.write(options);
+      return true;
+    } catch (e1) {
+      if (typeof this.BluetoothLe.writeWithoutResponse === 'function') {
+        await this.BluetoothLe.writeWithoutResponse(options);
+        return true;
+      }
+      throw e1;
+    }
+  }
+
+  /**
+   * Отправка байт с автоматическим подбором формата полезной нагрузки для нативного моста
+   */
+  async _sendBytes(uint8Bytes) {
+    if (!this.connectedDeviceId || !this.BluetoothLe) return;
+
+    // 1. Формируем Base64 строку
+    let base64Val = "";
+    try {
+      let binary = "";
+      for (let i = 0; i < uint8Bytes.length; i++) {
+        binary += String.fromCharCode(uint8Bytes[i]);
+      }
+      base64Val = window.btoa(binary);
+    } catch (e) {}
+
+    // 2. Формируем массив чисел
+    const numberArrayVal = Array.from(uint8Bytes);
+
+    // 3. Формируем DataView
+    const dataViewVal = new DataView(uint8Bytes.buffer, uint8Bytes.byteOffset, uint8Bytes.byteLength);
+
+    const variants = [
+      { name: "Base64 string", value: base64Val },
+      { name: "Numbers array", value: numberArrayVal },
+      { name: "DataView", value: dataViewVal }
+    ];
+
+    let lastErr = null;
+    for (const v of variants) {
+      if (!v.value) continue;
+      try {
+        const opts = {
+          deviceId: this.connectedDeviceId,
+          service: this.serviceUuid,
+          characteristic: this.rxUuid,
+          value: v.value
+        };
+        await this._writeRaw(opts);
+        console.log(`[JE Core] [TX Success] Успешно передано через формат: ${v.name}`);
+        return;
+      } catch (err) {
+        lastErr = err;
+        console.warn(`[JE Core] [TX Variant Failed] Формат ${v.name} не принят плагином:`, err);
+      }
+    }
+
+    throw lastErr || new Error("Все форматы отправки были отклонены плагином");
+  }
+
+  async sendCmd(cmd) {
     if (!this.connectedDeviceId || !this.BluetoothLe) {
       console.warn("[JE Core] Отправка отклонена: нет подключения или не инициализирован BLE плагин");
       return;
@@ -448,36 +511,15 @@ async sendCmd(cmd) {
     try {
       const formattedCmd = cmd.endsWith('\n') ? cmd : cmd + '\n';
       const bytes = new TextEncoder().encode(formattedCmd);
-      const dataView = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
 
-      console.log(`[JE Core] [TX Command] Отправка ${bytes.length} байт в характеристику RX (${this.rxUuid}): "${formattedCmd.trim()}"`);
+      console.log(`[JE Core] [TX Command] Отправка ${bytes.length} байт в RX (${this.rxUuid}): "${formattedCmd.trim()}"`);
+      await this._sendBytes(bytes);
 
-      const writeOptions = {
-        deviceId: this.connectedDeviceId,
-        service: this.serviceUuid,
-        characteristic: this.rxUuid,
-        value: dataView
-      };
-
-      try {
-        // Попытка стандартной записи (с подтверждением)
-        await this.BluetoothLe.write(writeOptions);
-      } catch (writeErr) {
-        console.warn("[JE Core] [TX Warning] Стандартная запись с подтверждением отклонена. Пробуем writeWithoutResponse...", writeErr);
-        
-        // Фолбэк для Nordic UART RX (почти всегда требует записи без подтверждения)
-        if (typeof this.BluetoothLe.writeWithoutResponse === 'function') {
-          await this.BluetoothLe.writeWithoutResponse(writeOptions);
-        } else {
-          throw writeErr;
-        }
-      }
-
-      console.log("[JE Core] [TX Success] Команда успешно передана в BLE стек");
     } catch (e) {
       console.error("[JE Core] [TX Error] Ошибка отправки команды:", e);
     }
   }
+
   async updateESP32Firmware() {
     if (!confirm(`Начать прошивку ESP32 до версии v${this.latestRemoteVersion}? Не отключайте устройство!`)) return;
 
@@ -502,20 +544,14 @@ async sendCmd(cmd) {
 
       const chunkSize = Math.min(244, Math.max(20, (this.currentMtu || 23) - 3));
       const total = bytes.length;
-      console.log(`[JE Core] [OTA] Начинаем передачу пакетов. Размер чанка: ${chunkSize} байт (исходя из MTU ${this.currentMtu})`);
+      console.log(`[JE Core] [OTA] Начинаем передачу пакетов. Размер чанка: ${chunkSize} байт (MTU ${this.currentMtu})`);
 
       let lastLoggedPercent = -1;
 
       for (let offset = 0; offset < total; offset += chunkSize) {
         const chunk = bytes.slice(offset, offset + chunkSize);
-        const chunkDataView = new DataView(chunk.buffer, chunk.byteOffset, chunk.byteLength);
 
-        await this.BluetoothLe.write({
-          deviceId: this.connectedDeviceId,
-          service: this.serviceUuid,
-          characteristic: this.rxUuid,
-          value: chunkDataView
-        });
+        await this._sendBytes(chunk);
 
         let percent = Math.round((offset / total) * 100);
         if (percent % 10 === 0 && percent !== lastLoggedPercent) {
