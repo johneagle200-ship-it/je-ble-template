@@ -12,119 +12,115 @@ class BaseBLEDevice {
     this.latestRemoteVersion = null;
 
     this.connectedDeviceId = null;
+    this.isConnecting = false; // Флаг блокировки от параллельных вызовов подключения
     this.isExplicitDisconnect = false;
     this.reconnectTimer = null;
     this.isOtaInProgress = false;
 
-    // Флаг проверки фактического получения системных разрешений Android
     this.hasPermissions = false;
 
-    // Накопительный буфер и потоковый декодер
     this.rxBuffer = "";
     this.streamDecoder = new TextDecoder('utf-8');
-    this.maxBufferSize = config.maxBufferSize || 16384; // Защитный лимит буфера (16 КБ)
-    this.currentMtu = 23; // Стандартный дефолтный MTU
+    this.maxBufferSize = config.maxBufferSize || 16384;
+    this.currentMtu = 23;
 
     this.valueListener = null;
+    this.disconnectListener = null;
     this.BluetoothLe = window.Capacitor?.Plugins?.BluetoothLe || (typeof Capacitor !== 'undefined' ? Capacitor.Plugins.BluetoothLe : null);
 
-    console.log("[JE Core] Инициализирован экземпляр BaseBLEDevice", {
+    console.log("[JE Core] Инициализирован модуль BaseBLEDevice", {
       repoOwner: this.repoOwner,
       repoName: this.repoName,
       appVersion: this.currentAppVersion
     });
   }
 
-async init() {
+  async init() {
     console.log("[JE Core] Запуск процесса инициализации (init)...");
     this.updateVersionUI();
     await this.loadAppVersion();
 
-    if (this.BluetoothLe) {
+    if (!this.BluetoothLe) {
+      console.warn("[JE Core] Плагин Capacitor BluetoothLe не обнаружен в системе!");
+      return;
+    }
+
+    try {
+      console.log("[JE Core] Инициализация плагина Capacitor BluetoothLe...");
       try {
-        console.log("[JE Core] Инициализация и проверка разрешений Capacitor BluetoothLe...");
-        
+        await this.BluetoothLe.initialize();
+      } catch (initErr) {
+        console.warn("[JE Core] Инициализация плагина уже выполнялась или выдала предупреждение:", initErr);
+      }
+
+      await this.ensurePermissions();
+
+      // Подписка на глобальное событие отключения
+      if (!this.disconnectListener) {
         try {
-          await this.BluetoothLe.initialize();
-        } catch (initErr) {
-          console.warn("[JE Core] Предупреждение initialize:", initErr);
-        }
-
-        try {
-          let needRequest = true;
-          if (typeof this.BluetoothLe.checkPermissions === 'function') {
-            const status = await this.BluetoothLe.checkPermissions();
-            console.log("[JE Core] Статус разрешений:", status);
-            if (status?.bluetoothConnect === 'granted' || status?.display === 'granted') {
-              needRequest = false;
-            }
-          }
-
-          if (needRequest) {
-            await this.BluetoothLe.requestPermissions();
-          }
-          this.hasPermissions = true;
-          console.log("[JE Core] Разрешения BLE подтверждены");
-        } catch (permErr) {
-          console.warn("[JE Core] Ошибка/предупреждение requestPermissions:", permErr);
-          // Не блокируем флаг насмерть, так как на некоторых прошивках метод кидает ошибку, если права уже даны
-          this.hasPermissions = true; 
-        }
-
-        await new Promise(r => setTimeout(r, 500));
-
-        try {
-          await this.BluetoothLe.addListener('disconnected', (info) => {
+          this.disconnectListener = await this.BluetoothLe.addListener('disconnected', (info) => {
             console.warn("[JE Core] [Событие] Связь с устройством потеряна:", info);
             if (!this.isExplicitDisconnect && this.connectedDeviceId) {
               console.log("[JE Core] Непредвиденный разрыв. Запуск авто-переподключения...");
               this.updateUI("reconnecting");
-              this.scheduleReconnect(1000);
+              this.scheduleReconnect(1500);
             } else {
-              console.log("[JE Core] Ручное или ожидаемое отключение. Реконнект отменен.");
+              console.log("[JE Core] Ручное или ожидаемое отключение.");
               this.updateUI("disconnected");
             }
           });
-          console.log("[JE Core] Слушатель события 'disconnected' зарегистрирован");
+          console.log("[JE Core] Слушатель события 'disconnected' успешно зарегистрирован");
         } catch (err) {
-          console.log("[JE Core] Слушатель отключения уже был зарегистрирован ранее");
-        }
-
-        const savedName = localStorage.getItem("savedDeviceName");
-        if (savedName) {
-          console.log(`[JE Core] Найдено сохраненное имя устройства: ${savedName}`);
-          const el = document.getElementById('deviceName');
-          if (el) el.innerText = savedName;
-        }
-
-        const savedId = localStorage.getItem("savedDeviceId");
-        if (savedId) {
-          console.log(`[JE Core] Найдено сохраненное ID устройства: ${savedId}. Запуск автоподключения...`);
-          this.connectedDeviceId = savedId;
-          this.isExplicitDisconnect = false;
-          this.connectNativeBLE(savedId);
-        } else {
-          console.log("[JE Core] Сохраненные устройства не найдены");
-        }
-      } catch (e) {
-        console.error("[JE Core] Ошибка инициализации BLE плагина:", e);
-        const savedId = localStorage.getItem("savedDeviceId");
-        if (savedId) {
-          console.log(`[JE Core] Попытка запланировать повторный реконнект к ${savedId} через 2с...`);
-          this.connectedDeviceId = savedId;
-          this.isExplicitDisconnect = false;
-          this.scheduleReconnect(2000);
+          console.warn("[JE Core] Не удалось зарегистрировать слушатель отключения:", err);
         }
       }
-    } else {
-      console.warn("[JE Core] Плагин Capacitor BluetoothLe не обнаружен в системе!");
+
+      // Восстановление сохраненных данных
+      const savedName = localStorage.getItem("savedDeviceName");
+      if (savedName) {
+        const el = document.getElementById('deviceName');
+        if (el) el.innerText = savedName;
+      }
+
+      const savedId = localStorage.getItem("savedDeviceId");
+      if (savedId) {
+        console.log(`[JE Core] Найдено сохраненное ID устройства: ${savedId}. Запуск автоподключения...`);
+        this.connectedDeviceId = savedId;
+        this.isExplicitDisconnect = false;
+        this.connectNativeBLE(savedId);
+      }
+    } catch (e) {
+      console.error("[JE Core] Критическая ошибка при инициализации BLE плагина:", e);
     }
 
     setTimeout(() => this.checkForUpdates(), 3000);
   }
+
+  // Безопасная проверка и запрос разрешений без падения приложения
+  async ensurePermissions() {
+    try {
+      let needRequest = true;
+      if (typeof this.BluetoothLe.checkPermissions === 'function') {
+        const status = await this.BluetoothLe.checkPermissions();
+        console.log("[JE Core] Статус текущих разрешений:", status);
+        if (status?.bluetoothConnect === 'granted' || status?.display === 'granted') {
+          needRequest = false;
+        }
+      }
+
+      if (needRequest && typeof this.BluetoothLe.requestPermissions === 'function') {
+        await this.BluetoothLe.requestPermissions();
+      }
+      this.hasPermissions = true;
+      console.log("[JE Core] Разрешения BLE успешно подтверждены");
+    } catch (permErr) {
+      console.warn("[JE Core] Предупреждение/ошибка при запросе разрешений (продолжаем с имеющимися):", permErr);
+      this.hasPermissions = true; 
+    }
+  }
+
   async loadAppVersion() {
     try {
-      console.log("[JE Core] Чтение локального package.json...");
       const res = await fetch('./package.json');
       if (res.ok) {
         const pkg = await res.json();
@@ -133,11 +129,9 @@ async init() {
           console.log(`[JE Core] Версия приложения из package.json: v${this.currentAppVersion}`);
           this.updateVersionUI();
         }
-      } else {
-        console.warn(`[JE Core] Не удалось загрузить package.json. Статус: ${res.status}`);
       }
     } catch (e) {
-      console.warn("[JE Core] Ошибка считывания package.json:", e);
+      console.warn("[JE Core] Не удалось прочитать package.json:", e);
       this.updateVersionUI();
     }
   }
@@ -147,14 +141,10 @@ async init() {
     if (versionEl) versionEl.innerText = `v${this.currentAppVersion}`;
 
     const espVerEl = document.getElementById('espFwVersion');
-    if (espVerEl) {
-      espVerEl.innerText = `v${this.espFwVersion || this.currentAppVersion}`;
-    }
+    if (espVerEl) espVerEl.innerText = `v${this.espFwVersion || this.currentAppVersion}`;
 
     const espTextEl = document.getElementById('espFwText');
-    if (espTextEl) {
-      espTextEl.innerText = `v${this.espFwVersion || this.currentAppVersion}`;
-    }
+    if (espTextEl) espTextEl.innerText = `v${this.espFwVersion || this.currentAppVersion}`;
   }
 
   isNewerVersion(remote, current) {
@@ -171,25 +161,19 @@ async init() {
 
   async checkForUpdates() {
     const url = `https://raw.githubusercontent.com/${this.repoOwner}/${this.repoName}/main/package.json`;
-    console.log(`[JE Core] Проверка обновлений на GitHub: ${url}`);
     try {
       const res = await fetch(url);
-      if (!res.ok) {
-        console.warn(`[JE Core] Ошибка запроса обновлений. Код: ${res.status}`);
-        return;
-      }
+      if (!res.ok) return;
       const pkg = await res.json();
       const remoteVersion = pkg.version;
 
       if (!remoteVersion) return;
       this.latestRemoteVersion = remoteVersion;
-      console.log(`[JE Core] Удаленная версия на GitHub: v${remoteVersion} (Текущая App: v${this.currentAppVersion}, ESP FW: v${this.espFwVersion})`);
 
       let hasUpdate = false;
 
       if (this.isNewerVersion(remoteVersion, this.currentAppVersion)) {
         hasUpdate = true;
-        console.log(`[JE Core] Доступно обновление приложения -> v${remoteVersion}`);
         const textEl = document.getElementById('updateNoticeText');
         const btnApp = document.getElementById('btnUpdateApp');
         const noticeEl = document.getElementById('updateNotice');
@@ -200,7 +184,6 @@ async init() {
 
       if (this.espFwVersion && this.isNewerVersion(remoteVersion, this.espFwVersion)) {
         hasUpdate = true;
-        console.log(`[JE Core] Доступно обновление прошивки ESP32 -> v${remoteVersion}`);
         const textEl = document.getElementById('updateNoticeText');
         const btnFw = document.getElementById('btnUpdateFW');
         const noticeEl = document.getElementById('updateNotice');
@@ -212,43 +195,44 @@ async init() {
       if (hasUpdate) {
         const badge = document.getElementById('menuBadge');
         if (badge) badge.style.display = 'block';
-      } else {
-        console.log("[JE Core] Установлены актуальные версии ПО и прошивки");
       }
     } catch (e) {
-      console.error("[JE Core] Ошибка при проверке обновлений:", e);
+      console.error("[JE Core] Ошибка проверки обновлений:", e);
     }
   }
 
   updateApp() {
     const apkUrl = `https://github.com/${this.repoOwner}/${this.repoName}/releases/download/latest/app-debug.apk`;
-    console.log(`[JE Core] Переход к скачиванию APK: ${apkUrl}`);
     window.open(apkUrl, '_system');
   }
 
   async connectOrReconnect() {
-    console.log("[JE Core] Ручной запуск подключения/переподключения");
+    console.log("[JE Core] Ручной запуск подключения");
     this.isExplicitDisconnect = false;
     clearTimeout(this.reconnectTimer);
-    if (this.connectedDeviceId) this.connectNativeBLE(this.connectedDeviceId);
-    else this.selectNewDevice();
+    if (this.connectedDeviceId) {
+      this.connectNativeBLE(this.connectedDeviceId);
+    } else {
+      this.selectNewDevice();
+    }
   }
 
   async selectNewDevice() {
-    if (!this.hasPermissions) {
-      console.warn("[JE Core] Отмена выбора устройства: отсутствуют разрешения BLE!");
-      this.updateUI("disconnected");
+    if (this.isConnecting) {
+      console.warn("[JE Core] Процесс подключения уже запущен, вызов пропущен");
       return;
     }
-    console.log("[JE Core] Открытие системного окна выбора BLE устройства...");
+
+    await this.ensurePermissions();
+
     try {
+      this.isConnecting = true;
       this.isExplicitDisconnect = true;
       clearTimeout(this.reconnectTimer);
       this.updateUI("connecting");
 
-      const result = await this.BluetoothLe.requestDevice({
-        displayUnconnected: true
-      });
+      console.log("[JE Core] Открытие диалога выбора устройства...");
+      const result = await this.BluetoothLe.requestDevice({ displayUnconnected: true });
 
       if (result && result.deviceId) {
         const deviceName = result.name || result.deviceId;
@@ -262,30 +246,37 @@ async init() {
         if (devNameEl) devNameEl.innerText = deviceName;
 
         this.isExplicitDisconnect = false;
+        
+        // Освобождаем блокировку перед вызовом основного подключения
+        this.isConnecting = false; 
         this.connectNativeBLE(result.deviceId);
       } else {
-        console.log("[JE Core] Устройство не было выбрано (отмена пользователя)");
+        console.log("[JE Core] Устройство не выбранопользователем");
+        this.isConnecting = false;
         this.updateUI("disconnected");
       }
     } catch (e) {
-      console.warn("[JE Core] Отмена или ошибка при выборе устройства:", e);
+      console.warn("[JE Core] Ошибка/отмена выбора устройства:", e);
+      this.isConnecting = false;
       this.updateUI("disconnected");
     }
   }
 
   async connectNativeBLE(deviceId) {
-    if (!this.hasPermissions) {
-      console.warn("[JE Core] Блокировка подключения: отсутствуют разрешения Android BLUETOOTH_CONNECT!");
-      this.updateUI("disconnected");
+    if (this.isConnecting) {
+      console.warn("[JE Core] Подключение уже выполняется. Повторный запрос заблокирован.");
       return;
     }
 
     if (!deviceId) {
-      console.warn("[JE Core] Не указан deviceId для подключения");
+      console.warn("[JE Core] Ошибка: deviceId не передан!");
       return;
     }
 
+    await this.ensurePermissions();
+
     try {
+      this.isConnecting = true;
       clearTimeout(this.reconnectTimer);
       console.log(`[JE Core] Соединение с BLE устройством ${deviceId}...`);
       this.updateUI("connecting");
@@ -293,103 +284,102 @@ async init() {
       this.rxBuffer = "";
       this.streamDecoder = new TextDecoder('utf-8');
       this.currentMtu = 23;
-      console.log("[JE Core] RX буфер и декодер сброшены");
 
-      await this.BluetoothLe.connect({ deviceId });
-      console.log(`[JE Core] Физическое BLE соединение с ${deviceId} установлено!`);
+      // 1. Подключение
+      await this.BluetoothLe.connect({ deviceId, timeout: 10000 });
+      console.log(`[JE Core] Физическое BLE соединение с ${deviceId} установлено`);
 
+      // Пауза для стабилизации GATT-стека на Android
+      await new Promise(r => setTimeout(r, 600));
+
+      // 2. Безопасный запрос MTU (изолирован от ошибок)
       try {
-        console.log("[JE Core] Запрос на увеличение MTU до 247...");
+        console.log("[JE Core] Запрос MTU 247...");
         const mtuRes = await this.BluetoothLe.requestMtu({ deviceId, mtu: 247 });
         if (mtuRes && mtuRes.mtu) {
           this.currentMtu = mtuRes.mtu;
-          console.log(`[JE Core] Успешно согласован MTU: ${this.currentMtu} байт`);
+          console.log(`[JE Core] Согласованный MTU: ${this.currentMtu}`);
         }
-      } catch (e) {
-        console.warn("[JE Core] Согласование MTU не поддержано или отклонено (остается дефолтный MTU=23):", e);
+      } catch (mtuErr) {
+        console.warn("[JE Core] Запрос MTU отклонен (используется базовый MTU=23):", mtuErr);
       }
 
       await new Promise(r => setTimeout(r, 300));
 
+      // 3. Подписка на данные
       if (!this.valueListener) {
-        console.log("[JE Core] Регистрация глобального слушателя 'characteristicValueReceived'...");
         this.valueListener = await this.BluetoothLe.addListener(
           'characteristicValueReceived',
           (result) => this._parseData(result)
         );
       }
 
+      // 4. Безопасная настройка уведомлений TX
       try {
-        console.log(`[JE Core] Остановка предыдущих подписок TX (${this.txUuid})...`);
         await this.BluetoothLe.stopNotifications({
           deviceId,
           service: this.serviceUuid,
           characteristic: this.txUuid
-        });
-      } catch (e) {}
+        }).catch(() => {});
 
-      console.log(`[JE Core] Подписка на уведомления (Notifications) TX (${this.txUuid})...`);
-      await this.BluetoothLe.startNotifications({
-        deviceId,
-        service: this.serviceUuid,
-        characteristic: this.txUuid
-      });
-      console.log("[JE Core] Подписка на TX успешно активирована");
+        await this.BluetoothLe.startNotifications({
+          deviceId,
+          service: this.serviceUuid,
+          characteristic: this.txUuid
+        });
+        console.log("[JE Core] Уведомления TX успешно активированы");
+      } catch (notifErr) {
+        console.error("[JE Core] Не удалось активировать TX notifications:", notifErr);
+      }
 
       this.updateUI("connected");
 
-      await new Promise(r => setTimeout(r, 600));
-      console.log("[JE Core] Отправка стартового системного запроса: { cmd: 'get_sys' }");
+      // 5. Запрос системной информации
+      await new Promise(r => setTimeout(r, 500));
       await this.sendCmd(JSON.stringify({ cmd: "get_sys" }));
 
     } catch (err) {
-      console.error(`[JE Core] Ошибка подключения к устройству ${deviceId}:`, err);
+      console.error(`[JE Core] Ошибка подключения к ${deviceId}:`, err);
       if (!this.isExplicitDisconnect) {
         this.updateUI("reconnecting");
-        this.scheduleReconnect(3000);
+        this.scheduleReconnect(4000);
       } else {
         this.updateUI("disconnected");
       }
+    } finally {
+      this.isConnecting = false;
     }
   }
 
   async disconnectBLE() {
-    console.log("[JE Core] Инициировано явное отключение BLE пользователем/системой...");
+    console.log("[JE Core] Отключение BLE...");
     this.isExplicitDisconnect = true;
     clearTimeout(this.reconnectTimer);
-    if (this.connectedDeviceId) {
+    
+    if (this.connectedDeviceId && this.BluetoothLe) {
       try { 
-        console.log(`[JE Core] Отписка от уведомления TX (${this.txUuid})...`);
         await this.BluetoothLe.stopNotifications({
           deviceId: this.connectedDeviceId,
           service: this.serviceUuid,
           characteristic: this.txUuid
-        });
-        console.log(`[JE Core] Вызов disconnect для ${this.connectedDeviceId}...`);
+        }).catch(() => {});
+        
         await this.BluetoothLe.disconnect({ deviceId: this.connectedDeviceId }); 
       } catch (e) {
-        console.warn("[JE Core] Ошибка при процедуре отключения:", e);
+        console.warn("[JE Core] Ошибка при отключении:", e);
       }
     }
     this.rxBuffer = "";
     this.updateUI("disconnected");
-    console.log("[JE Core] Отключение завершено, RX буфер очищен");
   }
 
   scheduleReconnect(delayMs) {
     clearTimeout(this.reconnectTimer);
     console.log(`[JE Core] Запланирован повторный реконнект через ${delayMs} мс`);
     this.reconnectTimer = setTimeout(() => {
-      if (!this.hasPermissions) {
-        console.warn("[JE Core] Отмена реконнекта: отсутствуют разрешения BLE!");
-        this.updateUI("disconnected");
-        return;
-      }
       if (!this.isExplicitDisconnect && this.connectedDeviceId) {
-        console.log(`[JE Core] Выполнение запланированного реконнекта к ${this.connectedDeviceId}...`);
+        console.log(`[JE Core] Выполнение реконнекта к ${this.connectedDeviceId}...`);
         this.connectNativeBLE(this.connectedDeviceId);
-      } else {
-        console.log("[JE Core] Запланированный реконнект отменен (явное отключение или нет ID)");
       }
     }, delayMs);
   }
@@ -411,7 +401,7 @@ async init() {
         bytes = new Uint8Array(rawVal.buffer, rawVal.byteOffset || 0, rawVal.byteLength || rawVal.buffer.byteLength);
       } else if (typeof rawVal === 'string') {
         try {
-          const binaryString = atob(rawVal);
+          const binaryString = window.atob(rawVal);
           bytes = new Uint8Array(binaryString.length);
           for (let i = 0; i < binaryString.length; i++) {
             bytes[i] = binaryString.charCodeAt(i);
@@ -424,17 +414,14 @@ async init() {
       } else if (typeof rawVal === 'object') {
         bytes = new Uint8Array(Object.values(rawVal));
       } else {
-        console.warn("[JE Core] Неизвестный формат сырых входящих данных:", rawVal);
         return;
       }
 
       const chunkStr = this.streamDecoder.decode(bytes, { stream: true });
       this.rxBuffer += chunkStr;
 
-      console.log(`[JE Core] [RX Chunk] Получено ${bytes.length} байт -> "${chunkStr.replace(/\n/g, '\\n').replace(/\r/g, '\\r')}" | Буфер (${this.rxBuffer.length}/${this.maxBufferSize})`);
-
       if (this.rxBuffer.length > this.maxBufferSize) {
-        console.warn(`[JE Core] Превышен защитный лимит буфера (${this.maxBufferSize} симв.), сброс накопленных данных!`);
+        console.warn("[JE Core] Превышен лимит буфера, сброс!");
         this.rxBuffer = "";
         return;
       }
@@ -445,28 +432,23 @@ async init() {
         this.rxBuffer = this.rxBuffer.substring(idx + 1);
         if (!line) continue;
 
-        console.log(`[JE Core] [RX Line Extracted] "${line}"`);
-
         try {
           const data = JSON.parse(line);
-          console.log("[JE Core] [JSON Parsed] Успешно распарсен пакет:", data);
 
           if (data.sys) {
             this.espFwVersion = typeof data.sys === 'object' ? data.sys.fw : data.sys;
-            console.log(`[JE Core] Получена версия прошивки ESP32: v${this.espFwVersion}`);
             this.updateVersionUI();
           }
 
           if (typeof this.onTelemetry === 'function') {
             this.onTelemetry(data);
           }
-
         } catch (e) {
-          console.warn("[JE Core] Ошибка парсинга JSON строки:", line, "Причина:", e.message);
+          console.warn("[JE Core] Ошибка парсинга JSON:", line, e.message);
         }
       }
     } catch (e) {
-      console.error("[JE Core] Критическая ошибка в _parseData:", e);
+      console.error("[JE Core] Ошибка в _parseData:", e);
     }
   }
 
@@ -495,105 +477,81 @@ async init() {
       base64Val = window.btoa(binary);
     } catch (e) {}
 
-    const numberArrayVal = Array.from(uint8Bytes);
-    const dataViewVal = new DataView(uint8Bytes.buffer, uint8Bytes.byteOffset, uint8Bytes.byteLength);
-
     const variants = [
       { name: "Base64 string", value: base64Val },
-      { name: "Numbers array", value: numberArrayVal },
-      { name: "DataView", value: dataViewVal }
+      { name: "Numbers array", value: Array.from(uint8Bytes) },
+      { name: "DataView", value: new DataView(uint8Bytes.buffer, uint8Bytes.byteOffset, uint8Bytes.byteLength) }
     ];
 
     let lastErr = null;
     for (const v of variants) {
       if (!v.value) continue;
       try {
-        const opts = {
+        await this._writeRaw({
           deviceId: this.connectedDeviceId,
           service: this.serviceUuid,
           characteristic: this.rxUuid,
           value: v.value
-        };
-        await this._writeRaw(opts);
-        console.log(`[JE Core] [TX Success] Успешно передано через формат: ${v.name}`);
+        });
         return;
       } catch (err) {
         lastErr = err;
-        console.warn(`[JE Core] [TX Variant Failed] Формат ${v.name} не принят плагином:`, err);
       }
     }
 
-    throw lastErr || new Error("Все форматы отправки были отклонены плагином");
+    throw lastErr || new Error("Все форматы отправки отклонены плагином");
   }
 
   async sendCmd(cmd) {
     if (!this.connectedDeviceId || !this.BluetoothLe) {
-      console.warn("[JE Core] Отправка отклонена: нет подключения или не инициализирован BLE плагин");
+      console.warn("[JE Core] Отправка отклонена: нет соединения");
       return;
     }
     try {
       const formattedCmd = cmd.endsWith('\n') ? cmd : cmd + '\n';
       const bytes = new TextEncoder().encode(formattedCmd);
-
-      console.log(`[JE Core] [TX Command] Отправка ${bytes.length} байт в RX (${this.rxUuid}): "${formattedCmd.trim()}"`);
       await this._sendBytes(bytes);
-
     } catch (e) {
-      console.error("[JE Core] [TX Error] Ошибка отправки команды:", e);
+      console.error("[JE Core] Ошибка отправки команды:", e);
     }
   }
 
   async updateESP32Firmware() {
-    if (!confirm(`Начать прошивку ESP32 до версии v${this.latestRemoteVersion}? Не отключайте устройство!`)) return;
+    if (!confirm(`Начать прошивку ESP32 до версии v${this.latestRemoteVersion}?`)) return;
 
     try {
       this.isOtaInProgress = true;
-      console.log(`[JE Core] [OTA] Старт процедуры OTA. Целевая версия: v${this.latestRemoteVersion}`);
       const statusEl = document.getElementById('bleStatus');
       if (statusEl) statusEl.innerText = "Загрузка файла...";
 
       const binUrl = `https://github.com/${this.repoOwner}/${this.repoName}/releases/download/latest/firmware.bin`;
-      console.log(`[JE Core] [OTA] Скачивание файла бинарника: ${binUrl}`);
       const res = await fetch(binUrl);
-      if (!res.ok) throw new Error(`Не удалось скачать firmware.bin с GitHub (Код: ${res.status})`);
+      if (!res.ok) throw new Error(`Ошибка загрузки firmware.bin (Код: ${res.status})`);
 
       const arrayBuffer = await res.arrayBuffer();
       const bytes = new Uint8Array(arrayBuffer);
-      console.log(`[JE Core] [OTA] Бинарник загружен, размер: ${bytes.length} байт`);
 
-      console.log("[JE Core] [OTA] Отправка команды OTA_START...");
       await this.sendCmd(JSON.stringify({ cmd: "OTA_START", size: bytes.length }));
       await new Promise(r => setTimeout(r, 1000));
 
       const chunkSize = Math.min(244, Math.max(20, (this.currentMtu || 23) - 3));
       const total = bytes.length;
-      console.log(`[JE Core] [OTA] Начинаем передачу пакетов. Размер чанка: ${chunkSize} байт (MTU ${this.currentMtu})`);
-
-      let lastLoggedPercent = -1;
 
       for (let offset = 0; offset < total; offset += chunkSize) {
         const chunk = bytes.slice(offset, offset + chunkSize);
-
         await this._sendBytes(chunk);
 
-        let percent = Math.round((offset / total) * 100);
-        if (percent % 10 === 0 && percent !== lastLoggedPercent) {
-          console.log(`[JE Core] [OTA Progress] Передано: ${offset}/${total} байт (${percent}%)`);
-          lastLoggedPercent = percent;
-        }
-
+        const percent = Math.round((offset / total) * 100);
         if (statusEl) statusEl.innerText = `Прошивка ESP32: ${percent}%`;
       }
 
-      console.log("[JE Core] [OTA] Все чанки переданы. Отправка команды OTA_END...");
       await this.sendCmd(JSON.stringify({ cmd: "OTA_END" }));
-      console.log("[JE Core] [OTA] Прошивка успешно передана. Устройство перезагружается.");
       alert("Прошивка успешно завершена! ESP32 перезагружается.");
       this.isOtaInProgress = false;
       this.disconnectBLE();
 
     } catch (e) {
-      console.error("[JE Core] [OTA Error] Ошибка в процессе OTA:", e);
+      console.error("[JE Core] Ошибка OTA:", e);
       alert("Ошибка прошивки: " + e.message);
       this.isOtaInProgress = false;
       this.updateUI("connected");
@@ -603,7 +561,6 @@ async init() {
   onTelemetry(data) {}
 
   updateUI(state) {
-    console.log(`[JE Core] [UI State] Переход состояния UI в: "${state}"`);
     const statusEl = document.getElementById('bleStatus');
     const statusInMenu = document.getElementById('bleStatusInMenu');
     const bottomBar = document.getElementById('bottomConnectBar');
