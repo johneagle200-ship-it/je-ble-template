@@ -35,28 +35,40 @@ class BaseBLEDevice {
     });
   }
 
-  async init() {
+async init() {
     console.log("[JE Core] Запуск процесса инициализации (init)...");
     this.updateVersionUI();
     await this.loadAppVersion();
 
     if (this.BluetoothLe) {
       try {
-        console.log("[JE Core] Инициализация и запрос разрешений Capacitor BluetoothLe...");
+        console.log("[JE Core] Инициализация и проверка разрешений Capacitor BluetoothLe...");
         
         try {
           await this.BluetoothLe.initialize();
         } catch (initErr) {
-          console.warn("[JE Core] Предупреждение initialize (уже инициализирован или не требуется):", initErr);
+          console.warn("[JE Core] Предупреждение initialize:", initErr);
         }
 
         try {
-          await this.BluetoothLe.requestPermissions();
+          let needRequest = true;
+          if (typeof this.BluetoothLe.checkPermissions === 'function') {
+            const status = await this.BluetoothLe.checkPermissions();
+            console.log("[JE Core] Статус разрешений:", status);
+            if (status?.bluetoothConnect === 'granted' || status?.display === 'granted') {
+              needRequest = false;
+            }
+          }
+
+          if (needRequest) {
+            await this.BluetoothLe.requestPermissions();
+          }
           this.hasPermissions = true;
-          console.log("[JE Core] Разрешения BLE успешно получены");
+          console.log("[JE Core] Разрешения BLE подтверждены");
         } catch (permErr) {
-          this.hasPermissions = false;
-          console.error("[JE Core] Ошибка получения разрешений BLE! Подключение заблокировано:", permErr);
+          console.warn("[JE Core] Ошибка/предупреждение requestPermissions:", permErr);
+          // Не блокируем флаг насмерть, так как на некоторых прошивках метод кидает ошибку, если права уже даны
+          this.hasPermissions = true; 
         }
 
         await new Promise(r => setTimeout(r, 500));
@@ -87,21 +99,15 @@ class BaseBLEDevice {
 
         const savedId = localStorage.getItem("savedDeviceId");
         if (savedId) {
-          if (this.hasPermissions) {
-            console.log(`[JE Core] Найдено сохраненное ID устройства: ${savedId}. Запуск автоподключения...`);
-            this.connectedDeviceId = savedId;
-            this.isExplicitDisconnect = false;
-            this.connectNativeBLE(savedId);
-          } else {
-            console.warn(`[JE Core] Найдено сохраненное ID устройства: ${savedId}, но нет разрешений BLE! Автоподключение отменено.`);
-            this.updateUI("disconnected");
-          }
+          console.log(`[JE Core] Найдено сохраненное ID устройства: ${savedId}. Запуск автоподключения...`);
+          this.connectedDeviceId = savedId;
+          this.isExplicitDisconnect = false;
+          this.connectNativeBLE(savedId);
         } else {
           console.log("[JE Core] Сохраненные устройства не найдены");
         }
       } catch (e) {
         console.error("[JE Core] Ошибка инициализации BLE плагина:", e);
-        this.hasPermissions = false;
         const savedId = localStorage.getItem("savedDeviceId");
         if (savedId) {
           console.log(`[JE Core] Попытка запланировать повторный реконнект к ${savedId} через 2с...`);
@@ -116,7 +122,6 @@ class BaseBLEDevice {
 
     setTimeout(() => this.checkForUpdates(), 3000);
   }
-
   async loadAppVersion() {
     try {
       console.log("[JE Core] Чтение локального package.json...");
