@@ -16,6 +16,9 @@ class BaseBLEDevice {
     this.reconnectTimer = null;
     this.isOtaInProgress = false;
 
+    // Флаг проверки фактического получения системных разрешений Android
+    this.hasPermissions = false;
+
     // Накопительный буфер и потоковый декодер
     this.rxBuffer = "";
     this.streamDecoder = new TextDecoder('utf-8');
@@ -49,9 +52,11 @@ class BaseBLEDevice {
 
         try {
           await this.BluetoothLe.requestPermissions();
-          console.log("[JE Core] Разрешения BLE успешно запрошены");
+          this.hasPermissions = true;
+          console.log("[JE Core] Разрешения BLE успешно получены");
         } catch (permErr) {
-          console.warn("[JE Core] Предупреждение requestPermissions:", permErr);
+          this.hasPermissions = false;
+          console.error("[JE Core] Ошибка получения разрешений BLE! Подключение заблокировано:", permErr);
         }
 
         await new Promise(r => setTimeout(r, 500));
@@ -82,15 +87,21 @@ class BaseBLEDevice {
 
         const savedId = localStorage.getItem("savedDeviceId");
         if (savedId) {
-          console.log(`[JE Core] Найдено сохраненное ID устройства: ${savedId}. Запуск автоподключения...`);
-          this.connectedDeviceId = savedId;
-          this.isExplicitDisconnect = false;
-          this.connectNativeBLE(savedId);
+          if (this.hasPermissions) {
+            console.log(`[JE Core] Найдено сохраненное ID устройства: ${savedId}. Запуск автоподключения...`);
+            this.connectedDeviceId = savedId;
+            this.isExplicitDisconnect = false;
+            this.connectNativeBLE(savedId);
+          } else {
+            console.warn(`[JE Core] Найдено сохраненное ID устройства: ${savedId}, но нет разрешений BLE! Автоподключение отменено.`);
+            this.updateUI("disconnected");
+          }
         } else {
           console.log("[JE Core] Сохраненные устройства не найдены");
         }
       } catch (e) {
         console.error("[JE Core] Ошибка инициализации BLE плагина:", e);
+        this.hasPermissions = false;
         const savedId = localStorage.getItem("savedDeviceId");
         if (savedId) {
           console.log(`[JE Core] Попытка запланировать повторный реконнект к ${savedId} через 2с...`);
@@ -219,6 +230,11 @@ class BaseBLEDevice {
   }
 
   async selectNewDevice() {
+    if (!this.hasPermissions) {
+      console.warn("[JE Core] Отмена выбора устройства: отсутствуют разрешения BLE!");
+      this.updateUI("disconnected");
+      return;
+    }
     console.log("[JE Core] Открытие системного окна выбора BLE устройства...");
     try {
       this.isExplicitDisconnect = true;
@@ -253,10 +269,17 @@ class BaseBLEDevice {
   }
 
   async connectNativeBLE(deviceId) {
+    if (!this.hasPermissions) {
+      console.warn("[JE Core] Блокировка подключения: отсутствуют разрешения Android BLUETOOTH_CONNECT!");
+      this.updateUI("disconnected");
+      return;
+    }
+
     if (!deviceId) {
       console.warn("[JE Core] Не указан deviceId для подключения");
       return;
     }
+
     try {
       clearTimeout(this.reconnectTimer);
       console.log(`[JE Core] Соединение с BLE устройством ${deviceId}...`);
@@ -352,6 +375,11 @@ class BaseBLEDevice {
     clearTimeout(this.reconnectTimer);
     console.log(`[JE Core] Запланирован повторный реконнект через ${delayMs} мс`);
     this.reconnectTimer = setTimeout(() => {
+      if (!this.hasPermissions) {
+        console.warn("[JE Core] Отмена реконнекта: отсутствуют разрешения BLE!");
+        this.updateUI("disconnected");
+        return;
+      }
       if (!this.isExplicitDisconnect && this.connectedDeviceId) {
         console.log(`[JE Core] Выполнение запланированного реконнекта к ${this.connectedDeviceId}...`);
         this.connectNativeBLE(this.connectedDeviceId);
@@ -437,9 +465,6 @@ class BaseBLEDevice {
     }
   }
 
-  /**
-   * Низкоуровневая отправка опций с авто-выбором метода (write / writeWithoutResponse)
-   */
   async _writeRaw(options) {
     try {
       await this.BluetoothLe.write(options);
@@ -453,13 +478,9 @@ class BaseBLEDevice {
     }
   }
 
-  /**
-   * Отправка байт с автоматическим подбором формата полезной нагрузки для нативного моста
-   */
   async _sendBytes(uint8Bytes) {
     if (!this.connectedDeviceId || !this.BluetoothLe) return;
 
-    // 1. Формируем Base64 строку
     let base64Val = "";
     try {
       let binary = "";
@@ -469,10 +490,7 @@ class BaseBLEDevice {
       base64Val = window.btoa(binary);
     } catch (e) {}
 
-    // 2. Формируем массив чисел
     const numberArrayVal = Array.from(uint8Bytes);
-
-    // 3. Формируем DataView
     const dataViewVal = new DataView(uint8Bytes.buffer, uint8Bytes.byteOffset, uint8Bytes.byteLength);
 
     const variants = [
