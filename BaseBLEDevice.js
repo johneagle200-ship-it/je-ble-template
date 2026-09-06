@@ -16,7 +16,11 @@ class BaseBLEDevice {
     this.reconnectTimer = null;
     this.isOtaInProgress = false;
 
+    // Накопительный буфер и потоковый декодер
     this.rxBuffer = "";
+    this.streamDecoder = new TextDecoder('utf-8');
+    this.maxBufferSize = 16384; // Защитный лимит буфера (16 КБ)
+    this.currentMtu = 23; // Стандартный дефолтный MTU
 
     this.BluetoothLe = window.Capacitor?.Plugins?.BluetoothLe || (typeof Capacitor !== 'undefined' ? Capacitor.Plugins.BluetoothLe : null);
   }
@@ -204,13 +208,23 @@ class BaseBLEDevice {
       clearTimeout(this.reconnectTimer);
       this.updateUI("connecting");
 
+      // Сброс накопительного буфера при новом подключении
       this.rxBuffer = "";
+      this.streamDecoder = new TextDecoder('utf-8');
+      this.currentMtu = 23;
 
       await this.BluetoothLe.connect({ deviceId });
 
+      // Запрос на увеличение MTU до 247 байт
       try {
-        await this.BluetoothLe.requestMtu({ deviceId, mtu: 247 });
-      } catch (e) {}
+        const mtuRes = await this.BluetoothLe.requestMtu({ deviceId, mtu: 247 });
+        if (mtuRes && mtuRes.mtu) {
+          this.currentMtu = mtuRes.mtu;
+          console.log(`[JE Core] Согласован MTU: ${this.currentMtu}`);
+        }
+      } catch (e) {
+        console.log("[JE Core] Согласование MTU не поддержано или отклонено:", e);
+      }
 
       await new Promise(r => setTimeout(r, 300));
 
@@ -259,6 +273,7 @@ class BaseBLEDevice {
         await this.BluetoothLe.disconnect({ deviceId: this.connectedDeviceId }); 
       } catch (e) {}
     }
+    this.rxBuffer = "";
     this.updateUI("disconnected");
   }
 
@@ -271,6 +286,9 @@ class BaseBLEDevice {
     }, delayMs);
   }
 
+  /**
+   * Универсальный потоковый парсер входящего BLE-трафика
+   */
   _parseData(result) {
     if (this.isOtaInProgress || !result) return;
 
@@ -280,6 +298,7 @@ class BaseBLEDevice {
 
       let bytes;
 
+      // Приведение любых типов данных от разных плагинов к Uint8Array
       if (rawVal instanceof Uint8Array) {
         bytes = rawVal;
       } else if (rawVal instanceof DataView) {
@@ -304,9 +323,18 @@ class BaseBLEDevice {
         return;
       }
 
-      const chunkStr = new TextDecoder('utf-8', { fatal: false }).decode(bytes);
+      // Потоковое декодирование в UTF-8 string (сохраняет целостность многобайтовых символов)
+      const chunkStr = this.streamDecoder.decode(bytes, { stream: true });
       this.rxBuffer += chunkStr;
 
+      // Защита от утечки памяти / переполнения (если данные приходят без \n)
+      if (this.rxBuffer.length > this.maxBufferSize) {
+        console.warn("[JE Core] Превышен лимит буфера, сброс накопленных данных");
+        this.rxBuffer = "";
+        return;
+      }
+
+      // Выделение готовых пакетов из накопительного буфера по разделителю \n
       let idx;
       while ((idx = this.rxBuffer.indexOf('\n')) !== -1) {
         const line = this.rxBuffer.substring(0, idx).trim();
@@ -331,7 +359,7 @@ class BaseBLEDevice {
             }
           }
 
-          // 3. Вызов обработчика в app.js (если объявлен)
+          // 3. Вызов пользовательского обработчика
           if (typeof this.onTelemetry === 'function') {
             this.onTelemetry(data);
           }
@@ -381,7 +409,8 @@ class BaseBLEDevice {
       await this.sendCmd(JSON.stringify({ cmd: "OTA_START", size: bytes.length }));
       await new Promise(r => setTimeout(r, 1000));
 
-      const chunkSize = 180;
+      // Расчет оптимального размера чанка исходя из реального MTU (минус 3 байта заголовка ATT)
+      const chunkSize = Math.min(244, Math.max(20, (this.currentMtu || 23) - 3));
       const total = bytes.length;
 
       for (let offset = 0; offset < total; offset += chunkSize) {
