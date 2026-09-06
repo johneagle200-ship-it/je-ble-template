@@ -17,6 +17,7 @@ class BaseBLEDevice {
     this.isOtaInProgress = false;
 
     this.rxBuffer = "";
+    this.onDataCallback = null;
 
     this.BluetoothLe = window.Capacitor?.Plugins?.BluetoothLe || (typeof Capacitor !== 'undefined' ? Capacitor.Plugins.BluetoothLe : null);
   }
@@ -208,14 +209,12 @@ class BaseBLEDevice {
 
       await this.BluetoothLe.connect({ deviceId });
 
-      // Запрашиваем комфортный MTU для Android
       try {
         await this.BluetoothLe.requestMtu({ deviceId, mtu: 247 });
       } catch (e) {}
 
       await new Promise(r => setTimeout(r, 300));
 
-      // Очистка предыдущих подписок во избежание сбоя
       try {
         await this.BluetoothLe.stopNotifications({
           deviceId,
@@ -224,7 +223,6 @@ class BaseBLEDevice {
         });
       } catch (e) {}
 
-      // Подписка на уведомления
       await this.BluetoothLe.startNotifications({
         deviceId,
         service: this.serviceUuid,
@@ -235,7 +233,6 @@ class BaseBLEDevice {
 
       this.updateUI("connected");
 
-      // Пауза перед стартовым запросом для завершения подписки CCCD
       await new Promise(r => setTimeout(r, 600));
       await this.sendCmd(JSON.stringify({ cmd: "get_sys" }));
 
@@ -280,11 +277,13 @@ class BaseBLEDevice {
 
     try {
       const rawVal = result?.value !== undefined ? result.value : result;
-      if (!rawVal) return;
+      if (rawVal === undefined || rawVal === null) return;
 
       let bytes;
 
-      if (rawVal instanceof DataView) {
+      if (rawVal instanceof Uint8Array) {
+        bytes = rawVal;
+      } else if (rawVal instanceof DataView) {
         bytes = new Uint8Array(rawVal.buffer, rawVal.byteOffset, rawVal.byteLength);
       } else if (rawVal && rawVal.buffer instanceof ArrayBuffer) {
         bytes = new Uint8Array(rawVal.buffer, rawVal.byteOffset || 0, rawVal.byteLength || rawVal.buffer.byteLength);
@@ -300,6 +299,8 @@ class BaseBLEDevice {
         }
       } else if (Array.isArray(rawVal)) {
         bytes = new Uint8Array(rawVal);
+      } else if (typeof rawVal === 'object') {
+        bytes = new Uint8Array(Object.values(rawVal));
       } else {
         return;
       }
@@ -315,12 +316,27 @@ class BaseBLEDevice {
 
         try {
           const data = JSON.parse(line);
+
           if (data.sys) {
             this.espFwVersion = data.sys.fw;
             this.updateVersionUI();
             continue;
           }
-          this.onTelemetry(data);
+
+          // Вызов пользовательских методов и колбэков
+          if (typeof this.onTelemetry === 'function') {
+            this.onTelemetry(data);
+          }
+          if (typeof this.onData === 'function') {
+            this.onData(data);
+          }
+          if (typeof this.onDataCallback === 'function') {
+            this.onDataCallback(data);
+          }
+
+          // Автоматическое обновление DOM для значения counter
+          this._autoUpdateCounterDOM(data);
+
         } catch (e) {
           console.warn("[JE Core] Ошибка парсинга JSON строки:", line, e);
         }
@@ -330,13 +346,24 @@ class BaseBLEDevice {
     }
   }
 
+  _autoUpdateCounterDOM(data) {
+    const val = data.counter !== undefined ? data.counter : (data.cnt !== undefined ? data.cnt : null);
+    if (val !== null) {
+      const targetIds = ['counter', 'counterVal', 'counterValue', 'telemetryCounter', 'cntValue', 'valCounter'];
+      for (const id of targetIds) {
+        const el = document.getElementById(id);
+        if (el) {
+          el.innerText = val;
+        }
+      }
+    }
+  }
+
   async sendCmd(cmd) {
     if (!this.connectedDeviceId || !this.BluetoothLe) return;
     try {
       const formattedCmd = cmd.endsWith('\n') ? cmd : cmd + '\n';
       const bytes = new TextEncoder().encode(formattedCmd);
-      
-      // Создание DataView вместо Base64-строки для защиты от краша натива
       const dataView = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
 
       await this.BluetoothLe.write({
