@@ -63,18 +63,18 @@ jobs:
           with open(path, "r") as f:
               content = f.read()
 
-          # Очищаем старые записи разрешений
+          # Очищаем старые дублирующиеся записи разрешений
           content = re.sub(r"\s*<uses-permission android:name=\"android\.permission\.BLUETOOTH[^\"]*\"[^>]*/>", "", content)
           content = re.sub(r"\s*<uses-permission android:name=\"android\.permission\.ACCESS_[^\"]*\"[^>]*/>", "", content)
           content = re.sub(r"\s*<uses-feature android:name=\"android\.hardware\.bluetooth_le\"[^>]*/>", "", content)
 
-          # Вставляем чистый блок перед <application
+          # Вставляем сформированный блок разрешений прямо перед <application
           content = content.replace("<application", perms + "\n    <application")
 
           with open(path, "w") as f:
               f.write(content)
           '
-          
+
       - name: Replace Android App Icons
         run: |
           find android/app/src/main/res/ -type f \( -name "ic_launcher*.png" -o -name "ic_launcher*.webp" \) -exec cp icon-512.png {} \;
