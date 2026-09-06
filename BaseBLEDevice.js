@@ -15,7 +15,7 @@ class BaseBLEDevice {
     this.isExplicitDisconnect = false;
     this.reconnectTimer = null;
     this.isOtaInProgress = false;
-    
+
     this.rxBuffer = ""; // Буфер для сборки фрагментов BLE-пакетов
 
     this.BluetoothLe = window.Capacitor?.Plugins?.BluetoothLe || (typeof Capacitor !== 'undefined' ? Capacitor.Plugins.BluetoothLe : null);
@@ -211,20 +211,29 @@ class BaseBLEDevice {
       clearTimeout(this.reconnectTimer);
       this.updateUI("connecting");
 
-      // Сбрасываем буфер при новом подключении
       this.rxBuffer = "";
 
       await this.BluetoothLe.connect({ deviceId });
+
+      // Пауза 300мс для завершения GATT-хэндшейка
+      await new Promise(r => setTimeout(r, 300));
+
       await this.BluetoothLe.startNotifications({
         deviceId,
         service: this.serviceUuid,
         characteristic: this.txUuid
-      }, (result) => this._parseData(result));
+      }, (result) => {
+        setTimeout(() => this._parseData(result), 0);
+      });
 
       this.updateUI("connected");
-      this.sendCmd(JSON.stringify({ cmd: "get_sys" }));
+
+      // Пауза 500мс для гарантированной подписки CCCD на ESP32 перед отправкой первого запроса
+      await new Promise(r => setTimeout(r, 500));
+      await this.sendCmd(JSON.stringify({ cmd: "get_sys" }));
 
     } catch (err) {
+      console.error("[JE Core] Ошибка подключения:", err);
       if (!this.isExplicitDisconnect) {
         this.updateUI("reconnecting");
         this.scheduleReconnect(3000);
@@ -252,66 +261,88 @@ class BaseBLEDevice {
     }, delayMs);
   }
 
-_parseData(result) {
-  if (this.isOtaInProgress) return;
+  _parseData(result) {
+    if (this.isOtaInProgress || !result) return;
 
-  try {
-    console.log("[JE Core] raw notification:", result);
+    try {
+      const rawVal = result?.value !== undefined ? result.value : result;
+      if (!rawVal) return;
 
-    // Универсальное извлечение байтов
-    let bytes;
-    if (result && result.value) {
-      // Capacitor sometimes returns { value: [1,2,3] } or { value: { buffer: ... } }
-      const v = result.value;
-      if (Array.isArray(v)) {
-        bytes = new Uint8Array(v);
-      } else if (v.buffer && v.byteLength !== undefined) {
-        bytes = new Uint8Array(v.buffer || v);
-      } else if (v instanceof ArrayBuffer) {
-        bytes = new Uint8Array(v);
-      } else {
-        // last resort: try to convert object to array
-        bytes = new Uint8Array(Object.values(v));
-      }
-    } else if (result && result.buffer) {
-      bytes = new Uint8Array(result.buffer);
-    } else if (Array.isArray(result)) {
-      bytes = new Uint8Array(result);
-    } else {
-      console.warn("[JE Core] Unknown notification payload shape", result);
-      return;
-    }
+      let bytes;
 
-    // Декодируем фрагмент безопасно
-    const chunkStr = new TextDecoder('utf-8', { fatal: false }).decode(bytes);
-
-    // Накопление в буфер
-    this.rxBuffer += chunkStr;
-
-    // Извлекаем полные строки по '\n'
-    let idx;
-    while ((idx = this.rxBuffer.indexOf('\n')) !== -1) {
-      const line = this.rxBuffer.substring(0, idx).trim();
-      this.rxBuffer = this.rxBuffer.substring(idx + 1);
-      if (!line) continue;
-
-      try {
-        const data = JSON.parse(line);
-        if (data.sys) {
-          this.espFwVersion = data.sys.fw;
-          this.updateVersionUI();
-          // ... обработка обновлений как раньше
-          continue;
+      // Декодирование байтов из разных структур плагина Capacitor
+      if (typeof rawVal === 'string') {
+        try {
+          const binaryString = atob(rawVal);
+          bytes = new Uint8Array(binaryString.length);
+          for (let i = 0; i < binaryString.length; i++) {
+            bytes[i] = binaryString.charCodeAt(i);
+          }
+        } catch (b64Err) {
+          bytes = new TextEncoder().encode(rawVal);
         }
-        this.onTelemetry(data);
-      } catch (e) {
-        console.warn("[JE Core] JSON parse failed for line:", line, e);
+      } else if (rawVal instanceof DataView) {
+        bytes = new Uint8Array(rawVal.buffer, rawVal.byteOffset, rawVal.byteLength);
+      } else if (rawVal && rawVal.buffer instanceof ArrayBuffer) {
+        bytes = new Uint8Array(rawVal.buffer, rawVal.byteOffset || 0, rawVal.byteLength || rawVal.buffer.byteLength);
+      } else if (Array.isArray(rawVal)) {
+        bytes = new Uint8Array(rawVal);
+      } else {
+        return;
       }
+
+      const chunkStr = new TextDecoder('utf-8', { fatal: false }).decode(bytes);
+      this.rxBuffer += chunkStr;
+
+      let idx;
+      while ((idx = this.rxBuffer.indexOf('\n')) !== -1) {
+        const line = this.rxBuffer.substring(0, idx).trim();
+        this.rxBuffer = this.rxBuffer.substring(idx + 1);
+        if (!line) continue;
+
+        try {
+          const data = JSON.parse(line);
+          if (data.sys) {
+            this.espFwVersion = data.sys.fw;
+            this.updateVersionUI();
+            continue;
+          }
+          this.onTelemetry(data);
+        } catch (e) {
+          console.warn("[JE Core] Ошибка парсинга JSON строки:", line, e);
+        }
+      }
+    } catch (e) {
+      console.error("[JE Core] Ошибка в _parseData:", e);
     }
-  } catch (e) {
-    console.error("[JE Core] _parseData error:", e);
   }
-}
+
+  _uint8ToBase64(bytes) {
+    let binary = '';
+    const len = bytes.byteLength;
+    for (let i = 0; i < len; i++) {
+      binary += String.fromCharCode(bytes[i]);
+    }
+    return btoa(binary);
+  }
+
+  async sendCmd(cmd) {
+    if (!this.connectedDeviceId || !this.BluetoothLe) return;
+    try {
+      const formattedCmd = cmd.endsWith('\n') ? cmd : cmd + '\n';
+      const bytes = new TextEncoder().encode(formattedCmd);
+      const base64Value = this._uint8ToBase64(bytes);
+
+      await this.BluetoothLe.write({
+        deviceId: this.connectedDeviceId,
+        service: this.serviceUuid,
+        characteristic: this.rxUuid,
+        value: base64Value
+      });
+    } catch (e) {
+      console.error("[JE Core] Ошибка отправки команды:", e);
+    }
+  }
 
   async updateESP32Firmware() {
     if (!confirm(`Начать прошивку ESP32 до версии v${this.latestRemoteVersion}? Не отключайте устройство!`)) return;
@@ -331,16 +362,18 @@ _parseData(result) {
       await this.sendCmd(JSON.stringify({ cmd: "OTA_START", size: bytes.length }));
       await new Promise(r => setTimeout(r, 1000));
 
-      const chunkSize = 200;
+      const chunkSize = 180;
       const total = bytes.length;
 
       for (let offset = 0; offset < total; offset += chunkSize) {
         const chunk = bytes.slice(offset, offset + chunkSize);
+        const base64Chunk = this._uint8ToBase64(chunk);
+
         await this.BluetoothLe.write({
           deviceId: this.connectedDeviceId,
           service: this.serviceUuid,
           characteristic: this.rxUuid,
-          value: Array.from(chunk)
+          value: base64Chunk
         });
 
         let percent = Math.round((offset / total) * 100);
@@ -357,19 +390,6 @@ _parseData(result) {
       this.isOtaInProgress = false;
       this.updateUI("connected");
     }
-  }
-
-  async sendCmd(cmd) {
-    if (!this.connectedDeviceId) return;
-    try {
-      const numbers = Array.from(new TextEncoder().encode(cmd));
-      await this.BluetoothLe.write({
-        deviceId: this.connectedDeviceId,
-        service: this.serviceUuid,
-        characteristic: this.rxUuid,
-        value: numbers
-      });
-    } catch (e) {}
   }
 
   onTelemetry(data) {}
