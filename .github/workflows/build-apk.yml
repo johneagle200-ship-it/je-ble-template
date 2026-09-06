@@ -49,25 +49,32 @@ jobs:
       - name: Patch AndroidManifest.xml for BLE Permissions
         run: |
           python3 -c '
+          import re
           path = "android/app/src/main/AndroidManifest.xml"
           perms = """
               <uses-permission android:name="android.permission.BLUETOOTH" android:maxSdkVersion="30" />
               <uses-permission android:name="android.permission.BLUETOOTH_ADMIN" android:maxSdkVersion="30" />
-              <uses-permission android:name="android.permission.BLUETOOTH_SCAN" />
+              <uses-permission android:name="android.permission.BLUETOOTH_SCAN" android:usesPermissionFlags="neverForLocation" />
               <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
               <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
               <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
               <uses-feature android:name="android.hardware.bluetooth_le" android:required="true" />
           """
-          with open(path, "r+") as f:
+          with open(path, "r") as f:
               content = f.read()
-              if "BLUETOOTH_CONNECT" not in content:
-                  content = content.replace("<application", perms + "\n    <application")
-                  f.seek(0)
-                  f.write(content)
-                  f.truncate()
-          '
 
+          # Очищаем старые записи разрешений
+          content = re.sub(r"\s*<uses-permission android:name=\"android\.permission\.BLUETOOTH[^\"]*\"[^>]*/>", "", content)
+          content = re.sub(r"\s*<uses-permission android:name=\"android\.permission\.ACCESS_[^\"]*\"[^>]*/>", "", content)
+          content = re.sub(r"\s*<uses-feature android:name=\"android\.hardware\.bluetooth_le\"[^>]*/>", "", content)
+
+          # Вставляем чистый блок перед <application
+          content = content.replace("<application", perms + "\n    <application")
+
+          with open(path, "w") as f:
+              f.write(content)
+          '
+          
       - name: Replace Android App Icons
         run: |
           find android/app/src/main/res/ -type f \( -name "ic_launcher*.png" -o -name "ic_launcher*.webp" \) -exec cp icon-512.png {} \;
