@@ -97,28 +97,33 @@ class BaseBLEDevice {
   }
 
   // Безопасная проверка и запрос разрешений без падения приложения
-  async ensurePermissions() {
-    try {
-      let needRequest = true;
-      if (typeof this.BluetoothLe.checkPermissions === 'function') {
-        const status = await this.BluetoothLe.checkPermissions();
-        console.log("[JE Core] Статус текущих разрешений:", status);
-        if (status?.bluetoothConnect === 'granted' || status?.display === 'granted') {
-          needRequest = false;
-        }
-      }
+async ensurePermissions() {
+  try {
+    if (typeof this.BluetoothLe.checkPermissions === 'function') {
+      const status = await this.BluetoothLe.checkPermissions();
+      console.log("[JE Core] Статус текущих разрешений:", status);
 
-      if (needRequest && typeof this.BluetoothLe.requestPermissions === 'function') {
-        await this.BluetoothLe.requestPermissions();
+      const connectGranted = status?.bluetoothConnect === 'granted';
+      const scanGranted = status?.bluetoothScan === 'granted';
+
+      // Если основные права Android 12+ уже получены, не вызывать requestPermissions
+      if (connectGranted && scanGranted) {
+        console.log("[JE Core] Все нужные разрешения BLE уже предоставлены");
+        this.hasPermissions = true;
+        return;
       }
-      this.hasPermissions = true;
-      console.log("[JE Core] Разрешения BLE успешно подтверждены");
-    } catch (permErr) {
-      console.warn("[JE Core] Предупреждение/ошибка при запросе разрешений (продолжаем с имеющимися):", permErr);
-      this.hasPermissions = true; 
     }
-  }
 
+    if (typeof this.BluetoothLe.requestPermissions === 'function') {
+      await this.BluetoothLe.requestPermissions();
+    }
+    this.hasPermissions = true;
+    console.log("[JE Core] Разрешения BLE успешно запрошены");
+  } catch (permErr) {
+    console.warn("[JE Core] Предупреждение/ошибка при запросе разрешений:", permErr);
+    this.hasPermissions = true;
+  }
+}
   async loadAppVersion() {
     try {
       const res = await fetch('./package.json');
