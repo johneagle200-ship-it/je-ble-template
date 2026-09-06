@@ -440,7 +440,7 @@ class BaseBLEDevice {
     }
   }
 
-  async sendCmd(cmd) {
+async sendCmd(cmd) {
     if (!this.connectedDeviceId || !this.BluetoothLe) {
       console.warn("[JE Core] Отправка отклонена: нет подключения или не инициализирован BLE плагин");
       return;
@@ -452,18 +452,32 @@ class BaseBLEDevice {
 
       console.log(`[JE Core] [TX Command] Отправка ${bytes.length} байт в характеристику RX (${this.rxUuid}): "${formattedCmd.trim()}"`);
 
-      await this.BluetoothLe.write({
+      const writeOptions = {
         deviceId: this.connectedDeviceId,
         service: this.serviceUuid,
         characteristic: this.rxUuid,
         value: dataView
-      });
-      console.log("[JE Core] [TX Success] Команда успешно передана в BLE стека");
+      };
+
+      try {
+        // Попытка стандартной записи (с подтверждением)
+        await this.BluetoothLe.write(writeOptions);
+      } catch (writeErr) {
+        console.warn("[JE Core] [TX Warning] Стандартная запись с подтверждением отклонена. Пробуем writeWithoutResponse...", writeErr);
+        
+        // Фолбэк для Nordic UART RX (почти всегда требует записи без подтверждения)
+        if (typeof this.BluetoothLe.writeWithoutResponse === 'function') {
+          await this.BluetoothLe.writeWithoutResponse(writeOptions);
+        } else {
+          throw writeErr;
+        }
+      }
+
+      console.log("[JE Core] [TX Success] Команда успешно передана в BLE стек");
     } catch (e) {
       console.error("[JE Core] [TX Error] Ошибка отправки команды:", e);
     }
   }
-
   async updateESP32Firmware() {
     if (!confirm(`Начать прошивку ESP32 до версии v${this.latestRemoteVersion}? Не отключайте устройство!`)) return;
 
