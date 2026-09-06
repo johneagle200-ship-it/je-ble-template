@@ -18,10 +18,9 @@
       font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
     }
 
-    /* Главный контейнер шапки */
     .app-header {
       display: flex;
-      align-items: center; /* Центрируем всё по вертикали */
+      align-items: center;
       padding: 12px 16px;
       background: #1e1e1e;
       border-bottom: 1px solid #2a2a2a;
@@ -30,7 +29,6 @@
       box-sizing: border-box;
     }
 
-    /* Левая панель */
     .header-left {
       display: flex;
       align-items: center;
@@ -41,10 +39,9 @@
       margin: 0; 
       font-size: 18px; 
       font-weight: 600; 
-      white-space: nowrap; /* Строго запрещаем перенос текста на 2 строки */
+      white-space: nowrap;
     }
 
-    /* Бейдж версии */
     .ver-badge { 
       font-size: 11px; 
       background: #2a2a2a; 
@@ -57,21 +54,16 @@
       line-height: 1;
     }
 
-    /* Распорка (занимает всё доступное место между краями) */
-    .header-spacer {
-      flex-grow: 1; 
-    }
+    .header-spacer { flex-grow: 1; }
 
-    /* Правая панель */
     .header-right {
       display: flex;
       align-items: center;
       justify-content: flex-end;
     }
 
-    /* Кнопка гамбургер */
     .menu-btn {
-      position: relative; /* Локальные координаты для красной точки */
+      position: relative;
       background: transparent;
       border: none;
       cursor: pointer;
@@ -89,7 +81,6 @@
       border-radius: 2px;
     }
 
-    /* Индикатор обновления (красная точка) */
     .menu-badge {
       position: absolute;
       top: 0px;
@@ -102,7 +93,6 @@
       box-shadow: 0 0 6px rgba(255, 59, 48, 0.8);
     }
 
-    /* Главный контейнер */
     .main-container { 
       padding: 16px; 
       padding-bottom: 90px;
@@ -123,7 +113,6 @@
     .status.pending { color: #ffca28; }
     .val { font-size: 38px; font-weight: bold; color: #00e676; margin-top: 10px; }
 
-    /* Нижняя плавающая кнопка */
     .bottom-bar {
       position: fixed;
       bottom: 0;
@@ -137,7 +126,6 @@
       box-sizing: border-box;
     }
 
-    /* Боковая шторка */
     .menu-drawer {
       position: fixed;
       top: 0;
@@ -232,19 +220,14 @@
 </head>
 <body>
 
-  <!-- Шапка -->
   <header class="app-header">
-    
-    <!-- Аналог Align = alLeft -->
     <div class="header-left">
       <h2 id="appTitle">JE Device</h2>
       <span id="espFwVersion" class="ver-badge">v1.0.0</span>
     </div>
 
-    <!-- Аналог Align = alClient (пружина) -->
     <div class="header-spacer"></div>
 
-    <!-- Аналог Align = alRight -->
     <div class="header-right">
       <button id="btnMenu" class="menu-btn" onclick="toggleMenu()">
         <div class="hamburger-line"></div>
@@ -253,10 +236,8 @@
         <span id="menuBadge" class="menu-badge" style="display: none;"></span>
       </button>
     </div>
-
   </header>
 
-  <!-- Рабочая область -->
   <main class="main-container">
     <div class="card">
       <div class="device-info">
@@ -266,17 +247,15 @@
     </div>
 
     <div class="card">
-      <div style="color: #aaa; font-size: 14px;">Данные с ESP32:</div>
+      <div style="color: #aaa; font-size: 14px;">Счётчик:</div>
       <div id="telemetryData" class="val">--</div>
     </div>
   </main>
 
-  <!-- Нижняя кнопка подключателя -->
   <div id="bottomConnectBar" class="bottom-bar">
     <button id="btnConnect" onclick="app.connectOrReconnect()">Подключиться</button>
   </div>
 
-  <!-- Меню -->
   <div id="settingsMenu" class="menu-drawer" style="display: none;">
     <div class="menu-content">
       <div class="menu-header">
