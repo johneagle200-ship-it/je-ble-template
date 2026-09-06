@@ -19,9 +19,10 @@ class BaseBLEDevice {
     // Накопительный буфер и потоковый декодер
     this.rxBuffer = "";
     this.streamDecoder = new TextDecoder('utf-8');
-    this.maxBufferSize = 16384; // Защитный лимит буфера (16 КБ)
+    this.maxBufferSize = config.maxBufferSize || 16384; // Защитный лимит буфера (16 КБ)
     this.currentMtu = 23; // Стандартный дефолтный MTU
 
+    this.valueListener = null;
     this.BluetoothLe = window.Capacitor?.Plugins?.BluetoothLe || (typeof Capacitor !== 'undefined' ? Capacitor.Plugins.BluetoothLe : null);
   }
 
@@ -228,6 +229,15 @@ class BaseBLEDevice {
 
       await new Promise(r => setTimeout(r, 300));
 
+      // 1. Регистрируем слушатель входящих данных от характеристик
+      if (!this.valueListener) {
+        this.valueListener = await this.BluetoothLe.addListener(
+          'characteristicValueReceived',
+          (result) => this._parseData(result)
+        );
+      }
+
+      // 2. Включаем подписку на notifications для TX характеристики
       try {
         await this.BluetoothLe.stopNotifications({
           deviceId,
@@ -240,8 +250,6 @@ class BaseBLEDevice {
         deviceId,
         service: this.serviceUuid,
         characteristic: this.txUuid
-      }, (result) => {
-        this._parseData(result);
       });
 
       this.updateUI("connected");
@@ -323,18 +331,18 @@ class BaseBLEDevice {
         return;
       }
 
-      // Потоковое декодирование в UTF-8 string (сохраняет целостность многобайтовых символов)
+      // Потоковое декодирование в UTF-8 string
       const chunkStr = this.streamDecoder.decode(bytes, { stream: true });
       this.rxBuffer += chunkStr;
 
-      // Защита от утечки памяти / переполнения (если данные приходят без \n)
+      // Защита от переполнения
       if (this.rxBuffer.length > this.maxBufferSize) {
         console.warn("[JE Core] Превышен лимит буфера, сброс накопленных данных");
         this.rxBuffer = "";
         return;
       }
 
-      // Выделение готовых пакетов из накопительного буфера по разделителю \n
+      // Выделение готовых пакетов по разделителю \n
       let idx;
       while ((idx = this.rxBuffer.indexOf('\n')) !== -1) {
         const line = this.rxBuffer.substring(0, idx).trim();
@@ -344,22 +352,13 @@ class BaseBLEDevice {
         try {
           const data = JSON.parse(line);
 
-          // 1. Системный пакет (версия прошивки)
+          // 1. Системный пакет
           if (data.sys) {
-            this.espFwVersion = data.sys.fw;
+            this.espFwVersion = typeof data.sys === 'object' ? data.sys.fw : data.sys;
             this.updateVersionUI();
-            continue;
           }
 
-          // 2. Телеметрия (счётчик)
-          if (data.counter !== undefined) {
-            const telemetryEl = document.getElementById('telemetryData');
-            if (telemetryEl) {
-              telemetryEl.innerText = data.counter;
-            }
-          }
-
-          // 3. Вызов пользовательского обработчика
+          // 2. Передача всех данных в пользовательский обработчик
           if (typeof this.onTelemetry === 'function') {
             this.onTelemetry(data);
           }
@@ -409,7 +408,6 @@ class BaseBLEDevice {
       await this.sendCmd(JSON.stringify({ cmd: "OTA_START", size: bytes.length }));
       await new Promise(r => setTimeout(r, 1000));
 
-      // Расчет оптимального размера чанка исходя из реального MTU (минус 3 байта заголовка ATT)
       const chunkSize = Math.min(244, Math.max(20, (this.currentMtu || 23) - 3));
       const total = bytes.length;
 
