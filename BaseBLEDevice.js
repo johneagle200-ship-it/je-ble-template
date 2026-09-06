@@ -17,7 +17,6 @@ class BaseBLEDevice {
     this.isOtaInProgress = false;
 
     this.rxBuffer = "";
-    this.onDataCallback = null;
 
     this.BluetoothLe = window.Capacitor?.Plugins?.BluetoothLe || (typeof Capacitor !== 'undefined' ? Capacitor.Plugins.BluetoothLe : null);
   }
@@ -317,25 +316,25 @@ class BaseBLEDevice {
         try {
           const data = JSON.parse(line);
 
+          // 1. Системный пакет (версия прошивки)
           if (data.sys) {
             this.espFwVersion = data.sys.fw;
             this.updateVersionUI();
             continue;
           }
 
-          // Вызов пользовательских методов и колбэков
+          // 2. Телеметрия (счётчик)
+          if (data.counter !== undefined) {
+            const telemetryEl = document.getElementById('telemetryData');
+            if (telemetryEl) {
+              telemetryEl.innerText = data.counter;
+            }
+          }
+
+          // 3. Вызов обработчика в app.js (если объявлен)
           if (typeof this.onTelemetry === 'function') {
             this.onTelemetry(data);
           }
-          if (typeof this.onData === 'function') {
-            this.onData(data);
-          }
-          if (typeof this.onDataCallback === 'function') {
-            this.onDataCallback(data);
-          }
-
-          // Автоматическое обновление DOM для значения counter
-          this._autoUpdateCounterDOM(data);
 
         } catch (e) {
           console.warn("[JE Core] Ошибка парсинга JSON строки:", line, e);
@@ -343,19 +342,6 @@ class BaseBLEDevice {
       }
     } catch (e) {
       console.error("[JE Core] Ошибка в _parseData:", e);
-    }
-  }
-
-  _autoUpdateCounterDOM(data) {
-    const val = data.counter !== undefined ? data.counter : (data.cnt !== undefined ? data.cnt : null);
-    if (val !== null) {
-      const targetIds = ['counter', 'counterVal', 'counterValue', 'telemetryCounter', 'cntValue', 'valCounter'];
-      for (const id of targetIds) {
-        const el = document.getElementById(id);
-        if (el) {
-          el.innerText = val;
-        }
-      }
     }
   }
 
@@ -450,6 +436,9 @@ class BaseBLEDevice {
       if (statusEl) statusEl.className = "status";
       if (bottomBar) bottomBar.style.display = "block";
       if (btnDisconnect) btnDisconnect.style.display = "none";
+      
+      const telemetryEl = document.getElementById('telemetryData');
+      if (telemetryEl) telemetryEl.innerText = "--";
     }
 
     if (statusEl) statusEl.innerText = textState;
