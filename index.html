@@ -220,6 +220,9 @@
 </head>
 <body>
 
+  <!-- Кнопка для вызова логов прошлого сеанса (при падении) -->
+  <button onclick="showCrashLog()" style="position: fixed; bottom: 85px; right: 16px; width: auto; padding: 8px 14px; font-size: 11px; background: #dc3545; z-index: 1000; border-radius: 20px; box-shadow: 0 4px 10px rgba(220,53,69,0.4);">📜 Логи падения</button>
+
   <header class="app-header">
     <div class="header-left">
       <h2 id="appTitle">JE Device</h2>
@@ -295,6 +298,58 @@
         menu.style.display = (menu.style.display === 'none' || !menu.style.display) ? 'flex' : 'none';
       }
     }
+
+    // --- СИСТЕМА СОХРАНЕНИЯ ЛОГОВ ДО ПАДЕНИЯ ---
+    window.lastSessionLogs = [];
+
+    (function() {
+      try {
+        const saved = localStorage.getItem('app_crash_logs');
+        if (saved) {
+          window.lastSessionLogs = JSON.parse(saved);
+        }
+      } catch (e) {}
+      // Сбрасываем буфер для текущего сеанса
+      localStorage.setItem('app_crash_logs', JSON.stringify([]));
+    })();
+
+    function saveToPersistentLog(text) {
+      try {
+        let logs = JSON.parse(localStorage.getItem('app_crash_logs') || '[]');
+        logs.push(`[${new Date().toLocaleTimeString()}] ${text}`);
+        if (logs.length > 200) logs.shift();
+        localStorage.setItem('app_crash_logs', JSON.stringify(logs));
+      } catch (e) {}
+    }
+
+    function showCrashLog() {
+      if (window.lastSessionLogs && window.lastSessionLogs.length > 0) {
+        alert("Логи прошлого сеанса до падения:\n\n" + window.lastSessionLogs.slice(-25).join("\n"));
+      } else {
+        alert("Логи прошлого сеанса пусты (падений не зафиксировано).");
+      }
+    }
+
+    // Перехватываем консоль для записи в постоянную память
+    (function() {
+      const oldLog = console.log;
+      const oldError = console.error;
+      const oldWarn = console.warn;
+
+      console.log = function(...args) {
+        saveToPersistentLog("LOG: " + args.map(a => typeof a === 'object' ? JSON.stringify(a) : a).join(' '));
+        oldLog.apply(console, args);
+      };
+      console.warn = function(...args) {
+        saveToPersistentLog("WARN: " + args.map(a => typeof a === 'object' ? JSON.stringify(a) : a).join(' '));
+        oldWarn.apply(console, args);
+      };
+      console.error = function(...args) {
+        saveToPersistentLog("ERROR: " + args.map(a => typeof a === 'object' ? JSON.stringify(a) : a).join(' '));
+        oldError.apply(console, args);
+      };
+    })();
+    // ------------------------------------------
   </script>
 
   <script src="AppUpdater.js"></script>
