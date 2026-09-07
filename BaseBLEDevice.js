@@ -9,6 +9,7 @@ class BaseBLEDevice {
     this.namePrefix = config.namePrefix || "JE_";
 
     this.autoConnect = config.autoConnect !== undefined ? config.autoConnect : true;
+    this.autoConnectBlocked = false;
     this.espFwVersion = null;
 
     this.connectedDeviceId = null;
@@ -17,12 +18,10 @@ class BaseBLEDevice {
     this.reconnectTimer = null;
     this.isOtaInProgress = false;
 
-    // --- CRASH GUARD (Защита от крэш-лупа с хранением в localStorage) ---
-    this.maxRapidCrashes = config.maxRapidCrashes || 3;
+    // --- CRASH GUARD (Энергонезависимая защита) ---
     this.minStableSessionMs = config.minStableSessionMs || 5000;
-    this.lastConnectTime = 0;
     this.stableTimer = null;
-    this.currentStep = "IDLE"; // Отслеживание текущего шага соединения
+    this.currentStep = "IDLE";
 
     this.hasPermissions = false;
 
@@ -41,7 +40,7 @@ class BaseBLEDevice {
     this.onStatusChangeCallback = config.onStatusChange || null;
     this.onOtaProgressCallback = config.onOtaProgress || null;
 
-    this._log("[JE Core] Инициализирован модуль BaseBLEDevice с расширенной диагностикой");
+    this._log("[JE Core] Модуль BaseBLEDevice инициализирован.");
   }
 
   // --- ДИАГНОСТИКА И ЛОГИРОВАНИЕ ---
@@ -53,11 +52,10 @@ class BaseBLEDevice {
     else if (level === "warn") console.warn(formatted);
     else console.log(formatted);
 
-    // Сохранение логов в localStorage для анализа после перезапуска
     try {
       const logs = JSON.parse(localStorage.getItem("ble_debug_logs") || "[]");
       logs.push(formatted);
-      if (logs.length > 80) logs.shift(); // Храним последние 80 записей
+      if (logs.length > 100) logs.shift(); // Храним последние 100 записей
       localStorage.setItem("ble_debug_logs", JSON.stringify(logs));
     } catch (e) {}
   }
@@ -72,25 +70,14 @@ class BaseBLEDevice {
 
   clearDebugLogs() {
     localStorage.removeItem("ble_debug_logs");
+    this._log("[JE Core] Журнал логов очищен.");
   }
 
-  // --- УПРАВЛЕНИЕ СЧЕТЧИКОМ СБОЕВВ LOCALSTORAGE ---
-  _getCrashCount() {
-    return parseInt(localStorage.getItem("ble_crash_count") || "0", 10);
-  }
-
-  _incrementCrashCount(reason = "") {
-    const count = this._getCrashCount() + 1;
-    localStorage.setItem("ble_crash_count", count.toString());
-    localStorage.setItem("ble_last_crash_reason", reason);
-    this._log(`[Crash Guard] Зафиксирован сбой (${reason}). Всего сбоев: ${count}/${this.maxRapidCrashes}`, "warn");
-    return count;
-  }
-
-  resetCrashGuard() {
-    localStorage.removeItem("ble_crash_count");
-    localStorage.removeItem("ble_last_crash_reason");
-    this._log("[Crash Guard] Сброс защиты и счетчика падений.");
+  printDebugLogs() {
+    const logs = this.getDebugLogs();
+    console.log("=== BLE DEBUG LOGS ===");
+    console.log(logs.join("\n"));
+    return logs.join("\n");
   }
 
   _setCurrentStep(stepName) {
@@ -99,8 +86,26 @@ class BaseBLEDevice {
     this._log(`[STEP] -> ${stepName}`);
   }
 
+  resetCrashLock() {
+    localStorage.removeItem("ble_crash_pending");
+    this.autoConnectBlocked = false;
+    this._log("[Crash Guard] Блокировка сбоя сброшена вручную.");
+  }
+
+  // --- ИНИЦИАЛИЗАЦИЯ С ПРОВЕРКОЙ СБОЯ ---
   async init() {
     this._log("[JE Core] Запуск процесса инициализации BLE...");
+
+    // ПРОВЕРКА: Если прошлый запуск завершился нативным крашем до истечения 5 секунд работы
+    const crashPending = localStorage.getItem("ble_crash_pending");
+    const lastStep = localStorage.getItem("ble_last_step") || "UNKNOWN";
+
+    if (crashPending === "1") {
+      this.autoConnectBlocked = true;
+      this._log(`[CRITICAL] Обнаружен нативный сбой при прошлом запуске!`, "error");
+      this._log(`[CRITICAL] Сбой произошел на шаге: [${lastStep}]`, "error");
+      this._log("[Crash Guard] Автоподключение ЗАБЛОКИРОВАНО. Проверь логи методом .printDebugLogs()", "warn");
+    }
 
     if (!this.BluetoothLe) {
       this._log("[JE Core] Плагин Capacitor BluetoothLe не обнаружен!", "warn");
@@ -119,27 +124,14 @@ class BaseBLEDevice {
       if (!this.disconnectListener) {
         try {
           this.disconnectListener = await this.BluetoothLe.addListener('disconnected', (info) => {
-            this._log(`[Событие] Связь потеряна на шаге [${this.currentStep}]: ${JSON.stringify(info)}`, "warn");
+            this._log(`[Событие] Потеря связи на шаге [${this.currentStep}]: ${JSON.stringify(info)}`, "warn");
             this.isConnecting = false;
             clearTimeout(this.stableTimer);
 
-            const sessionDuration = Date.now() - (this.lastConnectTime || 0);
-
-            if (!this.isExplicitDisconnect && this.connectedDeviceId) {
-              // Если обрыв произошел раньше порога стабильности
-              if (sessionDuration < this.minStableSessionMs) {
-                const crashes = this._incrementCrashCount(`Disconnect на шаге ${this.currentStep} спустя ${sessionDuration}мс`);
-                
-                if (crashes >= this.maxRapidCrashes) {
-                  this._log("[Crash Guard] БЛОКИРОВКА! Достигнут лимит падений. Автоподключение остановлено.", "error");
-                  this.updateUI("crash_loop");
-                  return;
-                }
-              }
-
+            if (!this.isExplicitDisconnect && this.connectedDeviceId && !this.autoConnectBlocked) {
               this._log("[JE Core] Планирование повторного подключения...");
               this.updateUI("reconnecting");
-              this.scheduleReconnect(2000);
+              this.scheduleReconnect(3000);
             } else {
               this.updateUI("disconnected");
             }
@@ -154,22 +146,17 @@ class BaseBLEDevice {
         this._setElementText('deviceName', savedName);
       }
 
-      // Проверка блокировки перед автоподключением
-      if (this.autoConnect) {
+      // АВТОПОДКЛЮЧЕНИЕ
+      if (this.autoConnect && !this.autoConnectBlocked) {
         const savedId = localStorage.getItem("savedDeviceId");
         if (savedId) {
-          if (this._getCrashCount() >= this.maxRapidCrashes) {
-            const lastReason = localStorage.getItem("ble_last_crash_reason") || "Неизвестно";
-            this._log(`[Crash Guard] Автоподключение отменено. Причина последнего падения: ${lastReason}`, "error");
-            this.updateUI("crash_loop");
-            return;
-          }
-
-          this._log(`Найдено сохраненное ID: ${savedId}. Автоподключение...`);
+          this._log(`Найдено сохраненное ID: ${savedId}. Запуск автоподключения...`);
           this.connectedDeviceId = savedId;
           this.isExplicitDisconnect = false;
           this.connectNativeBLE(savedId);
         }
+      } else if (this.autoConnectBlocked) {
+        this.updateUI("crash_loop");
       }
     } catch (e) {
       this._log(`Ошибка при инициализации BLE: ${e?.message || e}`, "error");
@@ -206,7 +193,7 @@ class BaseBLEDevice {
   }
 
   async connectOrReconnect() {
-    this.resetCrashGuard(); // Явное действие пользователя сбрасывает блокировку
+    this.resetCrashLock();
     this.isExplicitDisconnect = false;
     clearTimeout(this.reconnectTimer);
     if (this.connectedDeviceId) {
@@ -221,7 +208,7 @@ class BaseBLEDevice {
     await this.ensurePermissions();
 
     try {
-      this.resetCrashGuard();
+      this.resetCrashLock();
       this.isConnecting = true;
       this.isExplicitDisconnect = true;
       clearTimeout(this.reconnectTimer);
@@ -265,38 +252,33 @@ class BaseBLEDevice {
     }
   }
   
+  // --- ПОДКЛЮЧЕНИЕ С ПЕССИМИСТИЧНОЙ УСТАНОВКОЙ ФЛАГА ---
   async connectNativeBLE(deviceId) {
-    if (this.isConnecting) return;
-
-    if (!deviceId) {
-      this._log("Ошибка: deviceId не передан!", "warn");
-      return;
-    }
-
-    if (this._getCrashCount() >= this.maxRapidCrashes) {
-      this._log("[Crash Guard] Отмена подключения: превышен порог падений.", "error");
-      this.updateUI("crash_loop");
-      return;
-    }
+    if (this.isConnecting || !deviceId) return;
 
     await this.ensurePermissions();
 
     try {
       this.isConnecting = true;
-      this.lastConnectTime = Date.now(); // Засекаем время СРАЗУ в начале процедуры
       clearTimeout(this.reconnectTimer);
-      this.updateUI("connecting");
+      clearTimeout(this.stableTimer);
 
+      // ВЗВОДИМ ФЛАГ ПАДЕНИЯ ДО НАЧАЛА ОПЕРАЦИЙ
+      localStorage.setItem("ble_crash_pending", "1");
+
+      this.updateUI("connecting");
       this.rxBuffer = "";
       this.streamDecoder = new TextDecoder('utf-8');
       this.currentMtu = 23;
 
+      // 1. GATT
       this._setCurrentStep("GATT_CONNECTING");
       await this.BluetoothLe.connect({ deviceId, timeout: 10000 });
 
       this._setCurrentStep("GATT_STABILIZING");
       await new Promise(r => setTimeout(r, 500));
 
+      // 2. MTU
       this._setCurrentStep("MTU_REQUEST");
       try {
         const mtuRes = await this.BluetoothLe.requestMtu({ deviceId, mtu: 247 });
@@ -310,6 +292,7 @@ class BaseBLEDevice {
 
       await new Promise(r => setTimeout(r, 200));
 
+      // 3. LISTENERS & NOTIFICATIONS
       this._setCurrentStep("REGISTER_LISTENER");
       if (!this.valueListener) {
         this.valueListener = await this.BluetoothLe.addListener(
@@ -336,38 +319,29 @@ class BaseBLEDevice {
         throw notifErr;
       }
 
-      this._setCurrentStep("CONNECTED_STABLE_WAIT");
+      this._setCurrentStep("CONNECTED_WAITING_STABILITY");
       this.updateUI("connected");
 
-      // Сброс счетчика сбоев только после выдержки таймаута стабильности
-      clearTimeout(this.stableTimer);
-      this.stableTimer = setTimeout(() => {
-        if (this.connectedDeviceId && !this.isConnecting) {
-          this._log("[Crash Guard] Сессия продержалась >5с. Сброс защиты.");
-          this.resetCrashGuard();
-        }
-      }, this.minStableSessionMs);
-
+      // 4. СТАРТОВАЯ КОМАНДА
       await new Promise(r => setTimeout(r, 400));
       this._setCurrentStep("SEND_GET_SYS");
       await this.sendCmd(JSON.stringify({ cmd: "get_sys" }));
 
-      this._setCurrentStep("OPERATIONAL");
+      this._setCurrentStep("OPERATIONAL_PENDING_GUARD");
+
+      // СНИМАЕМ ФЛАГ ТОЛЬКО ЕСЛИ СЕССИЯ ПРОДЕРЖАЛАСЬ > 5 СЕКУНД БЕЗ НАТИВНОГО КРАША
+      this.stableTimer = setTimeout(() => {
+        if (this.connectedDeviceId && !this.isConnecting) {
+          this._log("[Crash Guard] Сессия стабильна (>5с). Флаг аварийного падения снят.");
+          localStorage.removeItem("ble_crash_pending");
+          this.autoConnectBlocked = false;
+          this._setCurrentStep("STABLE_OPERATIONAL");
+        }
+      }, this.minStableSessionMs);
 
     } catch (err) {
       this._log(`Ошибка на шаге [${this.currentStep}]: ${err?.message || err}`, "error");
-      
-      const crashes = this._incrementCrashCount(`Fail на шаге ${this.currentStep}`);
-      
-      if (crashes >= this.maxRapidCrashes) {
-        this._log("[Crash Guard] Серия неудачных попыток. Автоподключение приостановлено.", "error");
-        this.updateUI("crash_loop");
-      } else if (!this.isExplicitDisconnect) {
-        this.updateUI("reconnecting");
-        this.scheduleReconnect(3000);
-      } else {
-        this.updateUI("disconnected");
-      }
+      this.updateUI("disconnected");
     } finally {
       this.isConnecting = false;
     }
@@ -375,10 +349,14 @@ class BaseBLEDevice {
 
   async disconnectBLE() {
     this.isExplicitDisconnect = true;
-    this._setCurrentStep("DISCONNECTING");
     clearTimeout(this.reconnectTimer);
     clearTimeout(this.stableTimer);
     
+    // Ручное отключение не является крашем — снимаем флаг
+    localStorage.removeItem("ble_crash_pending");
+    this.autoConnectBlocked = false;
+
+    this._setCurrentStep("DISCONNECTING");
     if (this.connectedDeviceId && this.BluetoothLe) {
       try { 
         await this.BluetoothLe.stopNotifications({
@@ -400,7 +378,7 @@ class BaseBLEDevice {
   scheduleReconnect(delayMs) {
     clearTimeout(this.reconnectTimer);
     this.reconnectTimer = setTimeout(() => {
-      if (!this.isExplicitDisconnect && this.connectedDeviceId && this._getCrashCount() < this.maxRapidCrashes) {
+      if (!this.isExplicitDisconnect && this.connectedDeviceId && !this.autoConnectBlocked) {
         this.connectNativeBLE(this.connectedDeviceId);
       }
     }, delayMs);
@@ -631,7 +609,7 @@ class BaseBLEDevice {
     } else if (state === "ota_start") {
       textState = "Загрузка файла...";
     } else if (state === "crash_loop") {
-      textState = "Сбой (Цикл сбросов)";
+      textState = "Заблокировано (Сбой)";
       this._setElementClass('bleStatus', 'status error');
       this._setElementStyle('bottomConnectBar', 'display', 'block');
       this._setElementStyle('btnDisconnect', 'display', 'none');
