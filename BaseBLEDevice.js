@@ -43,6 +43,11 @@ class BaseBLEDevice {
     this._log("[JE Core] Модуль BaseBLEDevice инициализирован.");
   }
 
+  // --- ВСПОМОГАТЕЛЬНАЯ ЗАДЕРЖКА ---
+  _delay(ms) {
+    return new Promise((resolve) => setTimeout(resolve, ms));
+  }
+
   // --- ДИАГНОСТИКА И ЛОГИРОВАНИЕ ---
   _log(msg, level = "info") {
     const timestamp = new Date().toLocaleTimeString();
@@ -172,7 +177,6 @@ class BaseBLEDevice {
       this._log(`[CRITICAL] Сбой произошел на шаге: [${lastStep}]`, "error");
       this._log("[Crash Guard] Автоподключение ЗАБЛОКИРОВАНО.", "warn");
 
-      // Открываем модальное окно с логами сразу при обнаружении краша
       setTimeout(() => this.showLogsModal(), 300);
     }
 
@@ -320,8 +324,8 @@ class BaseBLEDevice {
       this.updateUI("disconnected");
     }
   }
-  
-  // --- ПОДКЛЮЧЕНИЕ С БЕЗОПАСНЫМИ ВЫЗОВАМИ И ПЕССИМИСТИЧНЫМ ФЛАГОМ ---
+
+  // --- РАЗНЕСЕННОЕ ПОДКЛЮЧЕНИЕ С ИЗОЛИРОВАННЫМИ ОПЕРАЦИЯМИ ---
   async connectNativeBLE(deviceId) {
     if (this.isConnecting || !deviceId) return;
 
@@ -332,7 +336,7 @@ class BaseBLEDevice {
       clearTimeout(this.reconnectTimer);
       clearTimeout(this.stableTimer);
 
-      // ВЗВОДИМ ФЛАГ ПАДЕНИЯ ДО НАЧАЛА ОПЕРАЦИЙ
+      // Взводим флаг падения до начала операций
       localStorage.setItem("ble_crash_pending", "1");
 
       this.updateUI("connecting");
@@ -340,14 +344,14 @@ class BaseBLEDevice {
       this.streamDecoder = new TextDecoder('utf-8');
       this.currentMtu = 23;
 
-      // 1. GATT
+      // 1. GATT CONNECT
       this._setCurrentStep("GATT_CONNECTING");
       await this.BluetoothLe.connect({ deviceId, timeout: 10000 });
 
       this._setCurrentStep("GATT_STABILIZING");
-      await new Promise(r => setTimeout(r, 500));
+      await this._delay(500); // Даем нативному стеку время зафиксировать соединение
 
-      // 2. MTU (С ПРОВЕРКОЙ НАЛИЧИЯ МЕТОДА)
+      // 2. REQUEST MTU (Защищенная попытка)
       this._setCurrentStep("MTU_REQUEST");
       if (typeof this.BluetoothLe.requestMtu === 'function') {
         try {
@@ -363,9 +367,9 @@ class BaseBLEDevice {
         this._log("Метод requestMtu не поддерживается плагином, пропускаем.", "warn");
       }
 
-      await new Promise(r => setTimeout(r, 200));
+      await this._delay(300);
 
-      // 3. LISTENERS & NOTIFICATIONS
+      // 3. REGISTER LISTENERS & START NOTIFICATIONS
       this._setCurrentStep("REGISTER_LISTENER");
       if (!this.valueListener) {
         this.valueListener = await this.BluetoothLe.addListener(
@@ -392,17 +396,20 @@ class BaseBLEDevice {
         throw notifErr;
       }
 
+      await this._delay(400); // Пауза для регистрации дескрипторов в ОС
+
+      // 4. ПЕРЕХОД В СОСТОЯНИЕ "ПОДКЛЮЧЕНО"
       this._setCurrentStep("CONNECTED_WAITING_STABILITY");
       this.updateUI("connected");
 
-      // 4. СТАРТОВАЯ КОМАНДА
-      await new Promise(r => setTimeout(r, 400));
-      this._setCurrentStep("SEND_GET_SYS");
-      await this.sendCmd(JSON.stringify({ cmd: "get_sys" }));
+      await this._delay(600); // Выдерживаем технологическую паузу перед записью
+
+      // 5. ИЗОЛИРОВАННАЯ И БЕЗОПАСНАЯ ОТПРАВКА СТАРТОВОЙ КОМАНДЫ
+      await this._safeSendHandshake();
 
       this._setCurrentStep("OPERATIONAL_PENDING_GUARD");
 
-      // СНИМАЕМ ФЛАГ ТОЛЬКО ЕСЛИ СЕССИЯ ПРОДЕРЖАЛАСЬ > 5 СЕКУНД БЕЗ НАТИВНОГО КРАША
+      // Снимаем флаг аварии только при сессии > 5 секунд без падения
       this.stableTimer = setTimeout(() => {
         if (this.connectedDeviceId && !this.isConnecting) {
           this._log("[Crash Guard] Сессия стабильна (>5с). Флаг аварийного падения снят.");
@@ -413,10 +420,34 @@ class BaseBLEDevice {
       }, this.minStableSessionMs);
 
     } catch (err) {
-      this._log(`Ошибка на шаге [${this.currentStep}]: ${err?.message || err}`, "error");
+      this._log(`Ошибка подключения на шаге [${this.currentStep}]: ${err?.message || err}`, "error");
       this.updateUI("disconnected");
     } finally {
       this.isConnecting = false;
+    }
+  }
+
+  /**
+   * Изолированный безопасный вызов get_sys с таймаутом
+   */
+  async _safeSendHandshake() {
+    this._setCurrentStep("SEND_GET_SYS");
+
+    try {
+      const payload = JSON.stringify({ cmd: "get_sys" });
+
+      // Гонка между отправкой и таймаутом в 3 секунды
+      await Promise.race([
+        this.sendCmd(payload),
+        new Promise((_, reject) =>
+          setTimeout(() => reject(new Error("Таймаут ожидания ответа на get_sys")), 3000)
+        )
+      ]);
+
+      this._log("[BLE] Запрос get_sys успешно передан устройству", "info");
+    } catch (cmdErr) {
+      // Сбой запроса get_sys логгируется, но НЕ ломает статус подключения
+      this._log(`[WARN] Ошибка/таймаут при отправке get_sys: ${cmdErr?.message || cmdErr}. Соединение сохранено.`, "warn");
     }
   }
 
@@ -425,7 +456,7 @@ class BaseBLEDevice {
     clearTimeout(this.reconnectTimer);
     clearTimeout(this.stableTimer);
     
-    // Ручное отключение не является крашем — снимаем флаг
+    // Ручное отключение не является сбоем — снимаем флаг
     localStorage.removeItem("ble_crash_pending");
     this.autoConnectBlocked = false;
 
@@ -536,7 +567,9 @@ class BaseBLEDevice {
   }
 
   async _sendBytes(uint8Bytes) {
-    if (!this.connectedDeviceId || !this.BluetoothLe) return;
+    if (!this.connectedDeviceId || !this.BluetoothLe) {
+      throw new Error("Устройство не подключено");
+    }
 
     const getVariant = (type) => {
       if (type === 'dataview') return new DataView(uint8Bytes.buffer, uint8Bytes.byteOffset, uint8Bytes.byteLength);
@@ -589,13 +622,16 @@ class BaseBLEDevice {
   }
 
   async sendCmd(cmd) {
-    if (!this.connectedDeviceId || !this.BluetoothLe) return;
+    if (!this.connectedDeviceId || !this.BluetoothLe) {
+      throw new Error("Устройство не подключено");
+    }
     try {
       const formattedCmd = cmd.endsWith('\n') ? cmd : cmd + '\n';
       const bytes = new TextEncoder().encode(formattedCmd);
       await this._sendBytes(bytes);
     } catch (e) {
       this._log(`Ошибка отправки команды: ${e?.message || e}`, "error");
+      throw e; // Пробрасываем ошибку наружу для обработки вызывающим методом
     }
   }
 
@@ -624,7 +660,7 @@ class BaseBLEDevice {
       }
 
       await this.sendCmd(JSON.stringify({ cmd: "OTA_START", size: bytes.length }));
-      await new Promise(r => setTimeout(r, 1000));
+      await this._delay(1000);
 
       const chunkSize = Math.min(244, Math.max(20, (this.currentMtu || 23) - 3));
       const total = bytes.length;
@@ -633,7 +669,7 @@ class BaseBLEDevice {
         const chunk = bytes.slice(offset, offset + chunkSize);
         await this._sendBytes(chunk);
 
-        await new Promise(r => setTimeout(r, 10));
+        await this._delay(10);
 
         const percent = Math.round((offset / total) * 100);
         if (offset % (chunkSize * 5) === 0) {
@@ -645,7 +681,7 @@ class BaseBLEDevice {
         }
       }
 
-      await new Promise(r => setTimeout(r, 200));
+      await this._delay(200);
       await this.sendCmd(JSON.stringify({ cmd: "OTA_END" }));
       
       alert("Прошивка успешно завершена! ESP32 перезагружается.");
