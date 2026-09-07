@@ -95,12 +95,14 @@ class BaseBLEDevice {
     setTimeout(() => this.checkForUpdates(), 3000);
   }
 
-  async ensurePermissions() {
+async ensurePermissions() {
     try {
       if (typeof this.BluetoothLe.checkPermissions === 'function') {
         const status = await this.BluetoothLe.checkPermissions();
-        const connectGranted = status?.bluetoothConnect === 'granted';
-        const scanGranted = status?.bluetoothScan === 'granted';
+        
+        // На Android 12+ достаточно разрешения bluetoothScan и bluetoothConnect
+        const connectGranted = status?.bluetoothConnect === 'granted' || status?.display === 'granted';
+        const scanGranted = status?.bluetoothScan === 'granted' || status?.display === 'granted';
 
         if (connectGranted && scanGranted) {
           this.hasPermissions = true;
@@ -117,7 +119,6 @@ class BaseBLEDevice {
       this.hasPermissions = true;
     }
   }
-
   async loadAppVersion() {
     try {
       const res = await fetch('./package.json');
