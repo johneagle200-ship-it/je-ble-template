@@ -2,11 +2,14 @@ class BaseBLEDevice {
   constructor(config = {}) {
     this.repoOwner = config.repoOwner || "johneagle200-ship-it";
     this.repoName = config.repoName || "je-ble-template";
-    this.serviceUuid = config.serviceUuid || "6e400001-b5a3-f393-e0a9-e50e24dcca9e";
-    this.rxUuid = config.rxUuid || "6e400002-b5a3-f393-e0a9-e50e24dcca9e";
-    this.txUuid = config.txUuid || "6e400003-b5a3-f393-e0a9-e50e24dcca9e";
+    
+    // UUID приводим к нижнему регистру для предотвращения сбоев в Android/iOS
+    this.serviceUuid = (config.serviceUuid || "6e400001-b5a3-f393-e0a9-e50e24dcca9e").toLowerCase();
+    this.rxUuid = (config.rxUuid || "6e400002-b5a3-f393-e0a9-e50e24dcca9e").toLowerCase();
+    this.txUuid = (config.txUuid || "6e400003-b5a3-f393-e0a9-e50e24dcca9e").toLowerCase();
     this.namePrefix = config.namePrefix || "JE_";
 
+    this.autoConnect = config.autoConnect !== undefined ? config.autoConnect : true;
     this.espFwVersion = null;
 
     this.connectedDeviceId = null;
@@ -22,12 +25,17 @@ class BaseBLEDevice {
     this.maxBufferSize = config.maxBufferSize || 16384;
     this.currentMtu = 23;
 
-    // Кеш наиболее совместимого формата отправки для плагина (DataView/Base64/Array)
+    // Кеш формата отправки для плагина (DataView/Base64/Array)
     this.preferredWriteFormat = null; 
 
     this.valueListener = null;
     this.disconnectListener = null;
     this.BluetoothLe = window.Capacitor?.Plugins?.BluetoothLe || (typeof Capacitor !== 'undefined' ? Capacitor.Plugins.BluetoothLe : null);
+
+    // Внешние колбэки
+    this.onTelemetryCallback = config.onTelemetry || null;
+    this.onStatusChangeCallback = config.onStatusChange || null;
+    this.onOtaProgressCallback = config.onOtaProgress || null;
 
     console.log("[JE Core] Инициализирован модуль BaseBLEDevice");
   }
@@ -69,18 +77,19 @@ class BaseBLEDevice {
 
       const savedName = localStorage.getItem("savedDeviceName");
       if (savedName) {
-        const el = document.getElementById('deviceName');
-        if (el) el.innerText = savedName;
+        this._setElementText('deviceName', savedName);
       }
 
-      // --- АВТОПОДКЛЮЧЕНИЕ ВРЕМЕННО ОТКЛЮЧЕНО ДЛЯ ОТЛАДКИ ---
-      /*const savedId = localStorage.getItem("savedDeviceId");
-      if (savedId) {
-        console.log(`[JE Core] Найдено сохраненное ID: ${savedId}. Автоподключение...`);
-        this.connectedDeviceId = savedId;
-        this.isExplicitDisconnect = false;
-        this.connectNativeBLE(savedId);
-      }*/
+      // Автоподключение при старте (если включено и есть сохраненный ID)
+      if (this.autoConnect) {
+        const savedId = localStorage.getItem("savedDeviceId");
+        if (savedId) {
+          console.log(`[JE Core] Найдено сохраненное ID: ${savedId}. Автоподключение...`);
+          this.connectedDeviceId = savedId;
+          this.isExplicitDisconnect = false;
+          this.connectNativeBLE(savedId);
+        }
+      }
     } catch (e) {
       console.error("[JE Core] Ошибка при инициализации BLE:", e);
     }
@@ -111,11 +120,9 @@ class BaseBLEDevice {
   }
 
   updateEspFwUI() {
-    const espVerEl = document.getElementById('espFwVersion');
-    if (espVerEl) espVerEl.innerText = `v${this.espFwVersion || '---'}`;
-
-    const espTextEl = document.getElementById('espFwText');
-    if (espTextEl) espTextEl.innerText = `v${this.espFwVersion || '---'}`;
+    const versionStr = `v${this.espFwVersion || '---'}`;
+    this._setElementText('espFwVersion', versionStr);
+    this._setElementText('espFwText', versionStr);
   }
 
   async connectOrReconnect() {
@@ -128,7 +135,7 @@ class BaseBLEDevice {
     }
   }
 
-async selectNewDevice() {
+  async selectNewDevice() {
     if (this.isConnecting) return;
 
     await this.ensurePermissions();
@@ -141,7 +148,6 @@ async selectNewDevice() {
 
       let result = null;
       try {
-        // Передаем фильтры по сервису и префиксу имени для корректного отображения имени в нативном диалоге
         result = await this.BluetoothLe.requestDevice({ 
           displayUnconnected: true,
           services: [this.serviceUuid],
@@ -163,8 +169,7 @@ async selectNewDevice() {
         localStorage.setItem("savedDeviceId", result.deviceId);
         localStorage.setItem("savedDeviceName", deviceName);
 
-        const devNameEl = document.getElementById('deviceName');
-        if (devNameEl) devNameEl.innerText = deviceName;
+        this._setElementText('deviceName', deviceName);
 
         this.isExplicitDisconnect = false;
         this.isConnecting = false; 
@@ -208,6 +213,7 @@ async selectNewDevice() {
         const mtuRes = await this.BluetoothLe.requestMtu({ deviceId, mtu: 247 });
         if (mtuRes && mtuRes.mtu) {
           this.currentMtu = mtuRes.mtu;
+          console.log(`[JE Core] Установлен MTU: ${this.currentMtu}`);
         }
       } catch (mtuErr) {
         console.warn("[JE Core] MTU отклонен (используем 23):", mtuErr);
@@ -341,9 +347,7 @@ async selectNewDevice() {
             this.updateEspFwUI();
           }
 
-          if (typeof this.onTelemetry === 'function') {
-            this.onTelemetry(data);
-          }
+          this.onTelemetry(data);
         } catch (e) {
           console.warn("[JE Core] Ошибка парсинга JSON:", line);
         }
@@ -373,7 +377,8 @@ async selectNewDevice() {
       if (type === 'dataview') return new DataView(uint8Bytes.buffer, uint8Bytes.byteOffset, uint8Bytes.byteLength);
       if (type === 'base64') {
         let binary = "";
-        for (let i = 0; i < uint8Bytes.length; i++) {
+        const len = uint8Bytes.byteLength;
+        for (let i = 0; i < len; i++) {
           binary += String.fromCharCode(uint8Bytes[i]);
         }
         return window.btoa(binary);
@@ -429,20 +434,33 @@ async selectNewDevice() {
     }
   }
 
-  async updateESP32Firmware() {
+  /**
+   * Запуск обновления прошивки ESP32 по BLE.
+   * @param {string|ArrayBuffer|Uint8Array} [source] - URL бинарника или готовый буфер. Если не передан, берется последняя версия с GitHub.
+   */
+  async updateESP32Firmware(source = null) {
     if (!confirm("Начать прошивку ESP32 по BLE?")) return;
 
     try {
       this.isOtaInProgress = true;
-      const statusEl = document.getElementById('bleStatus');
-      if (statusEl) statusEl.innerText = "Загрузка файла...";
+      this.updateUI("ota_start");
 
-      const binUrl = `https://github.com/${this.repoOwner}/${this.repoName}/releases/download/latest/firmware.bin`;
-      const res = await fetch(binUrl);
-      if (!res.ok) throw new Error(`Ошибка загрузки firmware.bin (Код: ${res.status})`);
+      let bytes;
 
-      const arrayBuffer = await res.arrayBuffer();
-      const bytes = new Uint8Array(arrayBuffer);
+      if (source instanceof Uint8Array) {
+        bytes = source;
+      } else if (source instanceof ArrayBuffer) {
+        bytes = new Uint8Array(source);
+      } else {
+        const binUrl = typeof source === 'string' 
+          ? source 
+          : `https://github.com/${this.repoOwner}/${this.repoName}/releases/download/latest/firmware.bin`;
+
+        const res = await fetch(binUrl);
+        if (!res.ok) throw new Error(`Ошибка загрузки firmware.bin (Код: ${res.status})`);
+        const arrayBuffer = await res.arrayBuffer();
+        bytes = new Uint8Array(arrayBuffer);
+      }
 
       await this.sendCmd(JSON.stringify({ cmd: "OTA_START", size: bytes.length }));
       await new Promise(r => setTimeout(r, 1000));
@@ -457,8 +475,12 @@ async selectNewDevice() {
         await new Promise(r => setTimeout(r, 10));
 
         const percent = Math.round((offset / total) * 100);
-        if (statusEl && offset % (chunkSize * 5) === 0) {
-          statusEl.innerText = `Прошивка ESP32: ${percent}%`;
+        if (offset % (chunkSize * 5) === 0) {
+          if (typeof this.onOtaProgressCallback === 'function') {
+            this.onOtaProgressCallback(percent);
+          }
+          const statusEl = document.getElementById('bleStatus');
+          if (statusEl) statusEl.innerText = `Прошивка ESP32: ${percent}%`;
         }
       }
 
@@ -477,37 +499,57 @@ async selectNewDevice() {
     }
   }
 
-  onTelemetry(data) {}
+  // Переопределяемый метод или использование колбэка
+  onTelemetry(data) {
+    if (typeof this.onTelemetryCallback === 'function') {
+      this.onTelemetryCallback(data);
+    }
+  }
 
   updateUI(state) {
-    const statusEl = document.getElementById('bleStatus');
-    const statusInMenu = document.getElementById('bleStatusInMenu');
-    const bottomBar = document.getElementById('bottomConnectBar');
-    const btnDisconnect = document.getElementById('btnDisconnect');
-
     let textState = "Отключено";
 
     if (state === "connected") {
       textState = "Подключено";
-      if (statusEl) statusEl.className = "status connected";
-      if (bottomBar) bottomBar.style.display = "none";
-      if (btnDisconnect) btnDisconnect.style.display = "block";
+      this._setElementClass('bleStatus', 'status connected');
+      this._setElementStyle('bottomConnectBar', 'display', 'none');
+      this._setElementStyle('btnDisconnect', 'display', 'block');
     } else if (state === "connecting" || state === "reconnecting") {
       textState = state === "connecting" ? "Подключение..." : "Поиск...";
-      if (statusEl) statusEl.className = "status pending";
-      if (bottomBar) bottomBar.style.display = "none";
-      if (btnDisconnect) btnDisconnect.style.display = "block";
+      this._setElementClass('bleStatus', 'status pending');
+      this._setElementStyle('bottomConnectBar', 'display', 'none');
+      this._setElementStyle('btnDisconnect', 'display', 'block');
+    } else if (state === "ota_start") {
+      textState = "Загрузка файла...";
     } else {
       textState = "Отключено";
-      if (statusEl) statusEl.className = "status";
-      if (bottomBar) bottomBar.style.display = "block";
-      if (btnDisconnect) btnDisconnect.style.display = "none";
-      
-      const telemetryEl = document.getElementById('telemetryData');
-      if (telemetryEl) telemetryEl.innerText = "--";
+      this._setElementClass('bleStatus', 'status');
+      this._setElementStyle('bottomConnectBar', 'display', 'block');
+      this._setElementStyle('btnDisconnect', 'display', 'none');
+      this._setElementText('telemetryData', '--');
     }
 
-    if (statusEl) statusEl.innerText = textState;
-    if (statusInMenu) statusInMenu.innerText = textState;
+    this._setElementText('bleStatus', textState);
+    this._setElementText('bleStatusInMenu', textState);
+
+    if (typeof this.onStatusChangeCallback === 'function') {
+      this.onStatusChangeCallback(state, textState);
+    }
+  }
+
+  // --- Хелперы безопасной работы с DOM ---
+  _setElementText(id, text) {
+    const el = document.getElementById(id);
+    if (el) el.innerText = text;
+  }
+
+  _setElementClass(id, className) {
+    const el = document.getElementById(id);
+    if (el) el.className = className;
+  }
+
+  _setElementStyle(id, property, value) {
+    const el = document.getElementById(id);
+    if (el) el.style[property] = value;
   }
 }
