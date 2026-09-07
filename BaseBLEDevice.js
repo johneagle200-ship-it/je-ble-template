@@ -18,6 +18,13 @@ class BaseBLEDevice {
     this.reconnectTimer = null;
     this.isOtaInProgress = false;
 
+    // --- CRASH GUARD (Защита от крэш-лупа) ---
+    this.rapidCrashCount = 0;
+    this.maxRapidCrashes = config.maxRapidCrashes || 3; // Макс. число коротких сессий до блокировки
+    this.minStableSessionMs = config.minStableSessionMs || 5000; // Порог стабильного сеанса (мс)
+    this.lastConnectTime = 0;
+    this.stableTimer = null;
+
     this.hasPermissions = false;
 
     this.rxBuffer = "";
@@ -37,7 +44,7 @@ class BaseBLEDevice {
     this.onStatusChangeCallback = config.onStatusChange || null;
     this.onOtaProgressCallback = config.onOtaProgress || null;
 
-    console.log("[JE Core] Инициализирован модуль BaseBLEDevice");
+    console.log("[JE Core] Инициализирован модуль BaseBLEDevice с защитой Crash Guard");
   }
 
   async init() {
@@ -62,7 +69,25 @@ class BaseBLEDevice {
           this.disconnectListener = await this.BluetoothLe.addListener('disconnected', (info) => {
             console.warn("[JE Core] [Событие] Связь с устройством потеряна:", info);
             this.isConnecting = false;
+            clearTimeout(this.stableTimer);
+
+            // Оценка длительности последней сессии для Crash Guard
+            const sessionDuration = Date.now() - this.lastConnectTime;
+            
             if (!this.isExplicitDisconnect && this.connectedDeviceId) {
+              // Если обрыв произошел раньше, чем за minStableSessionMs — считаем это быстрым падением (Crash)
+              if (this.lastConnectTime > 0 && sessionDuration < this.minStableSessionMs) {
+                this.rapidCrashCount++;
+                console.warn(`[JE Core] [Crash Guard] Быстрый разрыв связи (${sessionDuration}мс). Сбоев подряд: ${this.rapidCrashCount}/${this.maxRapidCrashes}`);
+              }
+
+              // Проверка превышения лимита крэшей
+              if (this.rapidCrashCount >= this.maxRapidCrashes) {
+                console.error("[JE Core] [Crash Guard] ОБНАРУЖЕН КРЭШ-ЛУП! Автоподключение заблокировано.");
+                this.updateUI("crash_loop");
+                return;
+              }
+
               console.log("[JE Core] Запуск авто-переподключения...");
               this.updateUI("reconnecting");
               this.scheduleReconnect(1500);
@@ -126,6 +151,7 @@ class BaseBLEDevice {
   }
 
   async connectOrReconnect() {
+    this.rapidCrashCount = 0; // Сброс Crash Guard при явном намерении подключиться
     this.isExplicitDisconnect = false;
     clearTimeout(this.reconnectTimer);
     if (this.connectedDeviceId) {
@@ -141,6 +167,7 @@ class BaseBLEDevice {
     await this.ensurePermissions();
 
     try {
+      this.rapidCrashCount = 0; // Сброс Crash Guard при поиске нового устройства
       this.isConnecting = true;
       this.isExplicitDisconnect = true;
       clearTimeout(this.reconnectTimer);
@@ -244,14 +271,30 @@ class BaseBLEDevice {
         console.error("[JE Core] Не удалось активировать TX notifications:", notifErr);
       }
 
+      // Фиксация успешного подключения для Crash Guard
+      this.lastConnectTime = Date.now();
       this.updateUI("connected");
+
+      // Запуск таймера проверки стабильности сеанса
+      clearTimeout(this.stableTimer);
+      this.stableTimer = setTimeout(() => {
+        if (this.connectedDeviceId && !this.isConnecting) {
+          console.log("[JE Core] [Crash Guard] Сессия стабильна. Сброс счетчика аварийных падений.");
+          this.rapidCrashCount = 0;
+        }
+      }, this.minStableSessionMs);
 
       await new Promise(r => setTimeout(r, 400));
       await this.sendCmd(JSON.stringify({ cmd: "get_sys" }));
 
     } catch (err) {
       console.error(`[JE Core] Ошибка подключения к ${deviceId}:`, err);
-      if (!this.isExplicitDisconnect) {
+      
+      this.rapidCrashCount++;
+      if (this.rapidCrashCount >= this.maxRapidCrashes) {
+        console.error("[JE Core] [Crash Guard] Серия неудавшихся попыток подключения. Автоподключение приостановлено.");
+        this.updateUI("crash_loop");
+      } else if (!this.isExplicitDisconnect) {
         this.updateUI("reconnecting");
         this.scheduleReconnect(3000);
       } else {
@@ -265,6 +308,7 @@ class BaseBLEDevice {
   async disconnectBLE() {
     this.isExplicitDisconnect = true;
     clearTimeout(this.reconnectTimer);
+    clearTimeout(this.stableTimer);
     
     if (this.connectedDeviceId && this.BluetoothLe) {
       try { 
@@ -286,7 +330,7 @@ class BaseBLEDevice {
   scheduleReconnect(delayMs) {
     clearTimeout(this.reconnectTimer);
     this.reconnectTimer = setTimeout(() => {
-      if (!this.isExplicitDisconnect && this.connectedDeviceId) {
+      if (!this.isExplicitDisconnect && this.connectedDeviceId && this.rapidCrashCount < this.maxRapidCrashes) {
         this.connectNativeBLE(this.connectedDeviceId);
       }
     }, delayMs);
@@ -434,10 +478,6 @@ class BaseBLEDevice {
     }
   }
 
-  /**
-   * Запуск обновления прошивки ESP32 по BLE.
-   * @param {string|ArrayBuffer|Uint8Array} [source] - URL бинарника или готовый буфер. Если не передан, берется последняя версия с GitHub.
-   */
   async updateESP32Firmware(source = null) {
     if (!confirm("Начать прошивку ESP32 по BLE?")) return;
 
@@ -499,7 +539,6 @@ class BaseBLEDevice {
     }
   }
 
-  // Переопределяемый метод или использование колбэка
   onTelemetry(data) {
     if (typeof this.onTelemetryCallback === 'function') {
       this.onTelemetryCallback(data);
@@ -521,6 +560,11 @@ class BaseBLEDevice {
       this._setElementStyle('btnDisconnect', 'display', 'block');
     } else if (state === "ota_start") {
       textState = "Загрузка файла...";
+    } else if (state === "crash_loop") {
+      textState = "Сбой (Цикл сбросов)";
+      this._setElementClass('bleStatus', 'status error');
+      this._setElementStyle('bottomConnectBar', 'display', 'block');
+      this._setElementStyle('btnDisconnect', 'display', 'none');
     } else {
       textState = "Отключено";
       this._setElementClass('bleStatus', 'status');
@@ -537,7 +581,6 @@ class BaseBLEDevice {
     }
   }
 
-  // --- Хелперы безопасной работы с DOM ---
   _setElementText(id, text) {
     const el = document.getElementById(id);
     if (el) el.innerText = text;
