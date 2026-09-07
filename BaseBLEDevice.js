@@ -3,7 +3,6 @@ class BaseBLEDevice {
     this.repoOwner = config.repoOwner || "johneagle200-ship-it";
     this.repoName = config.repoName || "je-ble-template";
     
-    // UUID приводим к нижнему регистру для предотвращения сбоев в Android/iOS
     this.serviceUuid = (config.serviceUuid || "6e400001-b5a3-f393-e0a9-e50e24dcca9e").toLowerCase();
     this.rxUuid = (config.rxUuid || "6e400002-b5a3-f393-e0a9-e50e24dcca9e").toLowerCase();
     this.txUuid = (config.txUuid || "6e400003-b5a3-f393-e0a9-e50e24dcca9e").toLowerCase();
@@ -18,12 +17,12 @@ class BaseBLEDevice {
     this.reconnectTimer = null;
     this.isOtaInProgress = false;
 
-    // --- CRASH GUARD (Защита от крэш-лупа) ---
-    this.rapidCrashCount = 0;
-    this.maxRapidCrashes = config.maxRapidCrashes || 3; // Макс. число коротких сессий до блокировки
-    this.minStableSessionMs = config.minStableSessionMs || 5000; // Порог стабильного сеанса (мс)
+    // --- CRASH GUARD (Защита от крэш-лупа с хранением в localStorage) ---
+    this.maxRapidCrashes = config.maxRapidCrashes || 3;
+    this.minStableSessionMs = config.minStableSessionMs || 5000;
     this.lastConnectTime = 0;
     this.stableTimer = null;
+    this.currentStep = "IDLE"; // Отслеживание текущего шага соединения
 
     this.hasPermissions = false;
 
@@ -32,26 +31,79 @@ class BaseBLEDevice {
     this.maxBufferSize = config.maxBufferSize || 16384;
     this.currentMtu = 23;
 
-    // Кеш формата отправки для плагина (DataView/Base64/Array)
     this.preferredWriteFormat = null; 
 
     this.valueListener = null;
     this.disconnectListener = null;
     this.BluetoothLe = window.Capacitor?.Plugins?.BluetoothLe || (typeof Capacitor !== 'undefined' ? Capacitor.Plugins.BluetoothLe : null);
 
-    // Внешние колбэки
     this.onTelemetryCallback = config.onTelemetry || null;
     this.onStatusChangeCallback = config.onStatusChange || null;
     this.onOtaProgressCallback = config.onOtaProgress || null;
 
-    console.log("[JE Core] Инициализирован модуль BaseBLEDevice с защитой Crash Guard");
+    this._log("[JE Core] Инициализирован модуль BaseBLEDevice с расширенной диагностикой");
+  }
+
+  // --- ДИАГНОСТИКА И ЛОГИРОВАНИЕ ---
+  _log(msg, level = "info") {
+    const timestamp = new Date().toLocaleTimeString();
+    const formatted = `[${timestamp}] [${level.toUpperCase()}] ${msg}`;
+    
+    if (level === "error") console.error(formatted);
+    else if (level === "warn") console.warn(formatted);
+    else console.log(formatted);
+
+    // Сохранение логов в localStorage для анализа после перезапуска
+    try {
+      const logs = JSON.parse(localStorage.getItem("ble_debug_logs") || "[]");
+      logs.push(formatted);
+      if (logs.length > 80) logs.shift(); // Храним последние 80 записей
+      localStorage.setItem("ble_debug_logs", JSON.stringify(logs));
+    } catch (e) {}
+  }
+
+  getDebugLogs() {
+    try {
+      return JSON.parse(localStorage.getItem("ble_debug_logs") || "[]");
+    } catch (e) {
+      return [];
+    }
+  }
+
+  clearDebugLogs() {
+    localStorage.removeItem("ble_debug_logs");
+  }
+
+  // --- УПРАВЛЕНИЕ СЧЕТЧИКОМ СБОЕВВ LOCALSTORAGE ---
+  _getCrashCount() {
+    return parseInt(localStorage.getItem("ble_crash_count") || "0", 10);
+  }
+
+  _incrementCrashCount(reason = "") {
+    const count = this._getCrashCount() + 1;
+    localStorage.setItem("ble_crash_count", count.toString());
+    localStorage.setItem("ble_last_crash_reason", reason);
+    this._log(`[Crash Guard] Зафиксирован сбой (${reason}). Всего сбоев: ${count}/${this.maxRapidCrashes}`, "warn");
+    return count;
+  }
+
+  resetCrashGuard() {
+    localStorage.removeItem("ble_crash_count");
+    localStorage.removeItem("ble_last_crash_reason");
+    this._log("[Crash Guard] Сброс защиты и счетчика падений.");
+  }
+
+  _setCurrentStep(stepName) {
+    this.currentStep = stepName;
+    localStorage.setItem("ble_last_step", stepName);
+    this._log(`[STEP] -> ${stepName}`);
   }
 
   async init() {
-    console.log("[JE Core] Запуск процесса инициализации BLE...");
+    this._log("[JE Core] Запуск процесса инициализации BLE...");
 
     if (!this.BluetoothLe) {
-      console.warn("[JE Core] Плагин Capacitor BluetoothLe не обнаружен!");
+      this._log("[JE Core] Плагин Capacitor BluetoothLe не обнаружен!", "warn");
       return;
     }
 
@@ -59,7 +111,7 @@ class BaseBLEDevice {
       try {
         await this.BluetoothLe.initialize();
       } catch (initErr) {
-        console.warn("[JE Core] Предупреждение инициализации BLE:", initErr);
+        this._log(`[JE Core] Предупреждение инициализации BLE: ${initErr?.message || initErr}`, "warn");
       }
 
       await this.ensurePermissions();
@@ -67,36 +119,33 @@ class BaseBLEDevice {
       if (!this.disconnectListener) {
         try {
           this.disconnectListener = await this.BluetoothLe.addListener('disconnected', (info) => {
-            console.warn("[JE Core] [Событие] Связь с устройством потеряна:", info);
+            this._log(`[Событие] Связь потеряна на шаге [${this.currentStep}]: ${JSON.stringify(info)}`, "warn");
             this.isConnecting = false;
             clearTimeout(this.stableTimer);
 
-            // Оценка длительности последней сессии для Crash Guard
-            const sessionDuration = Date.now() - this.lastConnectTime;
-            
+            const sessionDuration = Date.now() - (this.lastConnectTime || 0);
+
             if (!this.isExplicitDisconnect && this.connectedDeviceId) {
-              // Если обрыв произошел раньше, чем за minStableSessionMs — считаем это быстрым падением (Crash)
-              if (this.lastConnectTime > 0 && sessionDuration < this.minStableSessionMs) {
-                this.rapidCrashCount++;
-                console.warn(`[JE Core] [Crash Guard] Быстрый разрыв связи (${sessionDuration}мс). Сбоев подряд: ${this.rapidCrashCount}/${this.maxRapidCrashes}`);
+              // Если обрыв произошел раньше порога стабильности
+              if (sessionDuration < this.minStableSessionMs) {
+                const crashes = this._incrementCrashCount(`Disconnect на шаге ${this.currentStep} спустя ${sessionDuration}мс`);
+                
+                if (crashes >= this.maxRapidCrashes) {
+                  this._log("[Crash Guard] БЛОКИРОВКА! Достигнут лимит падений. Автоподключение остановлено.", "error");
+                  this.updateUI("crash_loop");
+                  return;
+                }
               }
 
-              // Проверка превышения лимита крэшей
-              if (this.rapidCrashCount >= this.maxRapidCrashes) {
-                console.error("[JE Core] [Crash Guard] ОБНАРУЖЕН КРЭШ-ЛУП! Автоподключение заблокировано.");
-                this.updateUI("crash_loop");
-                return;
-              }
-
-              console.log("[JE Core] Запуск авто-переподключения...");
+              this._log("[JE Core] Планирование повторного подключения...");
               this.updateUI("reconnecting");
-              this.scheduleReconnect(1500);
+              this.scheduleReconnect(2000);
             } else {
               this.updateUI("disconnected");
             }
           });
         } catch (err) {
-          console.warn("[JE Core] Ошибка регистрации слушателя отключения:", err);
+          this._log(`Ошибка регистрации слушателя отключения: ${err?.message || err}`, "warn");
         }
       }
 
@@ -105,18 +154,25 @@ class BaseBLEDevice {
         this._setElementText('deviceName', savedName);
       }
 
-      // Автоподключение при старте (если включено и есть сохраненный ID)
+      // Проверка блокировки перед автоподключением
       if (this.autoConnect) {
         const savedId = localStorage.getItem("savedDeviceId");
         if (savedId) {
-          console.log(`[JE Core] Найдено сохраненное ID: ${savedId}. Автоподключение...`);
+          if (this._getCrashCount() >= this.maxRapidCrashes) {
+            const lastReason = localStorage.getItem("ble_last_crash_reason") || "Неизвестно";
+            this._log(`[Crash Guard] Автоподключение отменено. Причина последнего падения: ${lastReason}`, "error");
+            this.updateUI("crash_loop");
+            return;
+          }
+
+          this._log(`Найдено сохраненное ID: ${savedId}. Автоподключение...`);
           this.connectedDeviceId = savedId;
           this.isExplicitDisconnect = false;
           this.connectNativeBLE(savedId);
         }
       }
     } catch (e) {
-      console.error("[JE Core] Ошибка при инициализации BLE:", e);
+      this._log(`Ошибка при инициализации BLE: ${e?.message || e}`, "error");
     }
   }
 
@@ -124,7 +180,6 @@ class BaseBLEDevice {
     try {
       if (typeof this.BluetoothLe.checkPermissions === 'function') {
         const status = await this.BluetoothLe.checkPermissions();
-        
         const connectGranted = status?.bluetoothConnect === 'granted' || status?.display === 'granted';
         const scanGranted = status?.bluetoothScan === 'granted' || status?.display === 'granted';
 
@@ -139,7 +194,7 @@ class BaseBLEDevice {
       }
       this.hasPermissions = true;
     } catch (permErr) {
-      console.warn("[JE Core] Предупреждение запроса разрешений:", permErr);
+      this._log(`Предупреждение запроса разрешений: ${permErr?.message || permErr}`, "warn");
       this.hasPermissions = true;
     }
   }
@@ -151,7 +206,7 @@ class BaseBLEDevice {
   }
 
   async connectOrReconnect() {
-    this.rapidCrashCount = 0; // Сброс Crash Guard при явном намерении подключиться
+    this.resetCrashGuard(); // Явное действие пользователя сбрасывает блокировку
     this.isExplicitDisconnect = false;
     clearTimeout(this.reconnectTimer);
     if (this.connectedDeviceId) {
@@ -163,11 +218,10 @@ class BaseBLEDevice {
 
   async selectNewDevice() {
     if (this.isConnecting) return;
-
     await this.ensurePermissions();
 
     try {
-      this.rapidCrashCount = 0; // Сброс Crash Guard при поиске нового устройства
+      this.resetCrashGuard();
       this.isConnecting = true;
       this.isExplicitDisconnect = true;
       clearTimeout(this.reconnectTimer);
@@ -182,7 +236,7 @@ class BaseBLEDevice {
           optionalServices: [this.serviceUuid]
         });
       } catch (nativeEx) {
-        console.error("[JE Core] Нативный сбой при сканировании BLE:", nativeEx);
+        this._log(`Нативный сбой при сканировании: ${nativeEx?.message || nativeEx}`, "error");
         alert("Не удалось запустить поиск BLE. Проверьте разрешения геолокации и Bluetooth.");
         this.isConnecting = false;
         this.updateUI("disconnected");
@@ -195,7 +249,6 @@ class BaseBLEDevice {
 
         localStorage.setItem("savedDeviceId", result.deviceId);
         localStorage.setItem("savedDeviceName", deviceName);
-
         this._setElementText('deviceName', deviceName);
 
         this.isExplicitDisconnect = false;
@@ -206,7 +259,7 @@ class BaseBLEDevice {
         this.updateUI("disconnected");
       }
     } catch (e) {
-      console.warn("[JE Core] Отмена выбора устройства:", e);
+      this._log(`Отмена выбора устройства: ${e?.message || e}`, "warn");
       this.isConnecting = false;
       this.updateUI("disconnected");
     }
@@ -216,7 +269,13 @@ class BaseBLEDevice {
     if (this.isConnecting) return;
 
     if (!deviceId) {
-      console.warn("[JE Core] Ошибка: deviceId не передан!");
+      this._log("Ошибка: deviceId не передан!", "warn");
+      return;
+    }
+
+    if (this._getCrashCount() >= this.maxRapidCrashes) {
+      this._log("[Crash Guard] Отмена подключения: превышен порог падений.", "error");
+      this.updateUI("crash_loop");
       return;
     }
 
@@ -224,6 +283,7 @@ class BaseBLEDevice {
 
     try {
       this.isConnecting = true;
+      this.lastConnectTime = Date.now(); // Засекаем время СРАЗУ в начале процедуры
       clearTimeout(this.reconnectTimer);
       this.updateUI("connecting");
 
@@ -231,23 +291,26 @@ class BaseBLEDevice {
       this.streamDecoder = new TextDecoder('utf-8');
       this.currentMtu = 23;
 
+      this._setCurrentStep("GATT_CONNECTING");
       await this.BluetoothLe.connect({ deviceId, timeout: 10000 });
 
-      // Пауза для стабилизации GATT-стека на Android
+      this._setCurrentStep("GATT_STABILIZING");
       await new Promise(r => setTimeout(r, 500));
 
+      this._setCurrentStep("MTU_REQUEST");
       try {
         const mtuRes = await this.BluetoothLe.requestMtu({ deviceId, mtu: 247 });
         if (mtuRes && mtuRes.mtu) {
           this.currentMtu = mtuRes.mtu;
-          console.log(`[JE Core] Установлен MTU: ${this.currentMtu}`);
+          this._log(`Установлен MTU: ${this.currentMtu}`);
         }
       } catch (mtuErr) {
-        console.warn("[JE Core] MTU отклонен (используем 23):", mtuErr);
+        this._log(`MTU отклонен (используем 23): ${mtuErr?.message || mtuErr}`, "warn");
       }
 
       await new Promise(r => setTimeout(r, 200));
 
+      this._setCurrentStep("REGISTER_LISTENER");
       if (!this.valueListener) {
         this.valueListener = await this.BluetoothLe.addListener(
           'characteristicValueReceived',
@@ -255,6 +318,7 @@ class BaseBLEDevice {
         );
       }
 
+      this._setCurrentStep("START_NOTIFICATIONS");
       try {
         await this.BluetoothLe.stopNotifications({
           deviceId,
@@ -268,31 +332,35 @@ class BaseBLEDevice {
           characteristic: this.txUuid
         });
       } catch (notifErr) {
-        console.error("[JE Core] Не удалось активировать TX notifications:", notifErr);
+        this._log(`Не удалось активировать TX notifications: ${notifErr?.message || notifErr}`, "error");
+        throw notifErr;
       }
 
-      // Фиксация успешного подключения для Crash Guard
-      this.lastConnectTime = Date.now();
+      this._setCurrentStep("CONNECTED_STABLE_WAIT");
       this.updateUI("connected");
 
-      // Запуск таймера проверки стабильности сеанса
+      // Сброс счетчика сбоев только после выдержки таймаута стабильности
       clearTimeout(this.stableTimer);
       this.stableTimer = setTimeout(() => {
         if (this.connectedDeviceId && !this.isConnecting) {
-          console.log("[JE Core] [Crash Guard] Сессия стабильна. Сброс счетчика аварийных падений.");
-          this.rapidCrashCount = 0;
+          this._log("[Crash Guard] Сессия продержалась >5с. Сброс защиты.");
+          this.resetCrashGuard();
         }
       }, this.minStableSessionMs);
 
       await new Promise(r => setTimeout(r, 400));
+      this._setCurrentStep("SEND_GET_SYS");
       await this.sendCmd(JSON.stringify({ cmd: "get_sys" }));
 
+      this._setCurrentStep("OPERATIONAL");
+
     } catch (err) {
-      console.error(`[JE Core] Ошибка подключения к ${deviceId}:`, err);
+      this._log(`Ошибка на шаге [${this.currentStep}]: ${err?.message || err}`, "error");
       
-      this.rapidCrashCount++;
-      if (this.rapidCrashCount >= this.maxRapidCrashes) {
-        console.error("[JE Core] [Crash Guard] Серия неудавшихся попыток подключения. Автоподключение приостановлено.");
+      const crashes = this._incrementCrashCount(`Fail на шаге ${this.currentStep}`);
+      
+      if (crashes >= this.maxRapidCrashes) {
+        this._log("[Crash Guard] Серия неудачных попыток. Автоподключение приостановлено.", "error");
         this.updateUI("crash_loop");
       } else if (!this.isExplicitDisconnect) {
         this.updateUI("reconnecting");
@@ -307,6 +375,7 @@ class BaseBLEDevice {
 
   async disconnectBLE() {
     this.isExplicitDisconnect = true;
+    this._setCurrentStep("DISCONNECTING");
     clearTimeout(this.reconnectTimer);
     clearTimeout(this.stableTimer);
     
@@ -320,17 +389,18 @@ class BaseBLEDevice {
         
         await this.BluetoothLe.disconnect({ deviceId: this.connectedDeviceId }); 
       } catch (e) {
-        console.warn("[JE Core] Ошибка при отключении:", e);
+        this._log(`Ошибка при отключении: ${e?.message || e}`, "warn");
       }
     }
     this.rxBuffer = "";
+    this._setCurrentStep("IDLE");
     this.updateUI("disconnected");
   }
 
   scheduleReconnect(delayMs) {
     clearTimeout(this.reconnectTimer);
     this.reconnectTimer = setTimeout(() => {
-      if (!this.isExplicitDisconnect && this.connectedDeviceId && this.rapidCrashCount < this.maxRapidCrashes) {
+      if (!this.isExplicitDisconnect && this.connectedDeviceId && this._getCrashCount() < this.maxRapidCrashes) {
         this.connectNativeBLE(this.connectedDeviceId);
       }
     }, delayMs);
@@ -372,7 +442,7 @@ class BaseBLEDevice {
       this.rxBuffer += this.streamDecoder.decode(bytes, { stream: true });
 
       if (this.rxBuffer.length > this.maxBufferSize) {
-        console.warn("[JE Core] Буфер переполнен, сброс!");
+        this._log("Буфер переполнен, сброс!", "warn");
         this.rxBuffer = "";
         return;
       }
@@ -393,11 +463,11 @@ class BaseBLEDevice {
 
           this.onTelemetry(data);
         } catch (e) {
-          console.warn("[JE Core] Ошибка парсинга JSON:", line);
+          this._log(`Ошибка парсинга JSON: ${line}`, "warn");
         }
       }
     } catch (e) {
-      console.error("[JE Core] Ошибка в _parseData:", e);
+      this._log(`Ошибка в _parseData: ${e?.message || e}`, "error");
     }
   }
 
@@ -474,7 +544,7 @@ class BaseBLEDevice {
       const bytes = new TextEncoder().encode(formattedCmd);
       await this._sendBytes(bytes);
     } catch (e) {
-      console.error("[JE Core] Ошибка отправки команды:", e);
+      this._log(`Ошибка отправки команды: ${e?.message || e}`, "error");
     }
   }
 
@@ -532,7 +602,7 @@ class BaseBLEDevice {
       this.disconnectBLE();
 
     } catch (e) {
-      console.error("[JE Core] Ошибка OTA:", e);
+      this._log(`Ошибка OTA: ${e?.message || e}`, "error");
       alert("Ошибка прошивки: " + e.message);
       this.isOtaInProgress = false;
       this.updateUI("connected");
