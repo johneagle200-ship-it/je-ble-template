@@ -24,7 +24,7 @@ class BaseBLEDevice {
     this.maxBufferSize = config.maxBufferSize || 16384;
     this.currentMtu = 23;
 
-    // Кеш наиболее совместимого формата отправки для плагина (Base64/Array/DataView)
+    // Кеш наиболее совместимого формата отправки для плагина (DataView/Base64/Array)
     this.preferredWriteFormat = null; 
 
     this.valueListener = null;
@@ -61,7 +61,7 @@ class BaseBLEDevice {
         try {
           this.disconnectListener = await this.BluetoothLe.addListener('disconnected', (info) => {
             console.warn("[JE Core] [Событие] Связь с устройством потеряна:", info);
-            this.isConnecting = false; // Сбрасываем блокировку при обрыве
+            this.isConnecting = false;
             if (!this.isExplicitDisconnect && this.connectedDeviceId) {
               console.log("[JE Core] Запуск авто-переподключения...");
               this.updateUI("reconnecting");
@@ -224,7 +224,10 @@ class BaseBLEDevice {
       clearTimeout(this.reconnectTimer);
       this.updateUI("connecting");
 
-      const result = await this.BluetoothLe.requestDevice({ displayUnconnected: true });
+      const result = await this.BluetoothLe.requestDevice({ 
+        displayUnconnected: true,
+        optionalServices: [this.serviceUuid]
+      });
 
       if (result && result.deviceId) {
         const deviceName = result.name || result.deviceId;
@@ -439,8 +442,8 @@ class BaseBLEDevice {
   async _sendBytes(uint8Bytes) {
     if (!this.connectedDeviceId || !this.BluetoothLe) return;
 
-    // Вспомогательная функция сборки вариантов
     const getVariant = (type) => {
+      if (type === 'dataview') return new DataView(uint8Bytes.buffer, uint8Bytes.byteOffset, uint8Bytes.byteLength);
       if (type === 'base64') {
         let binary = "";
         for (let i = 0; i < uint8Bytes.length; i++) {
@@ -449,11 +452,9 @@ class BaseBLEDevice {
         return window.btoa(binary);
       }
       if (type === 'array') return Array.from(uint8Bytes);
-      if (type === 'dataview') return new DataView(uint8Bytes.buffer, uint8Bytes.byteOffset, uint8Bytes.byteLength);
       return null;
     };
 
-    // Если определен успешный формат, отправляем только его
     if (this.preferredWriteFormat) {
       try {
         await this._writeRaw({
@@ -464,11 +465,11 @@ class BaseBLEDevice {
         });
         return;
       } catch (e) {
-        this.preferredWriteFormat = null; // При сбое сбрасываем и ищем заново
+        this.preferredWriteFormat = null;
       }
     }
 
-    const formats = ['base64', 'array', 'dataview'];
+    const formats = ['dataview', 'base64', 'array'];
     let lastErr = null;
 
     for (const fmt of formats) {
@@ -480,7 +481,7 @@ class BaseBLEDevice {
           characteristic: this.rxUuid,
           value: val
         });
-        this.preferredWriteFormat = fmt; // Кешируем работающий формат
+        this.preferredWriteFormat = fmt;
         return;
       } catch (err) {
         lastErr = err;
@@ -519,7 +520,6 @@ class BaseBLEDevice {
       await this.sendCmd(JSON.stringify({ cmd: "OTA_START", size: bytes.length }));
       await new Promise(r => setTimeout(r, 1000));
 
-      // Расчет размера чанка под MTU
       const chunkSize = Math.min(244, Math.max(20, (this.currentMtu || 23) - 3));
       const total = bytes.length;
 
@@ -527,11 +527,10 @@ class BaseBLEDevice {
         const chunk = bytes.slice(offset, offset + chunkSize);
         await this._sendBytes(chunk);
 
-        // Пауза 10мс для предотвращения переполнения кольцевого буфера на стороне BLE/Android
         await new Promise(r => setTimeout(r, 10));
 
         const percent = Math.round((offset / total) * 100);
-        if (statusEl && offset % (chunkSize * 5) === 0) { // Обновляем UI каждые 5 пакетов, чтобы DOM не лагал
+        if (statusEl && offset % (chunkSize * 5) === 0) {
           statusEl.innerText = `Прошивка ESP32: ${percent}%`;
         }
       }
