@@ -131,7 +131,6 @@ class BaseBLEDevice {
 async selectNewDevice() {
     if (this.isConnecting) return;
 
-    // Принудительно запрашиваем расширенные разрешения перед поиском для совместимости с Honor/Android 12+
     await this.ensurePermissions();
 
     try {
@@ -142,20 +141,23 @@ async selectNewDevice() {
 
       let result = null;
       try {
+        // Передаем фильтры по сервису и префиксу имени для корректного отображения имени в нативном диалоге
         result = await this.BluetoothLe.requestDevice({ 
           displayUnconnected: true,
+          services: [this.serviceUuid],
+          namePrefix: this.namePrefix,
           optionalServices: [this.serviceUuid]
         });
       } catch (nativeEx) {
         console.error("[JE Core] Нативный сбой при сканировании BLE:", nativeEx);
-        alert("Не удалось запустить поиск BLE. Проверьте разрешения геолокации и Bluetooth в настройках телефона.");
+        alert("Не удалось запустить поиск BLE. Проверьте разрешения геолокации и Bluetooth.");
         this.isConnecting = false;
         this.updateUI("disconnected");
         return;
       }
 
       if (result && result.deviceId) {
-        const deviceName = result.name || result.deviceId;
+        const deviceName = result.name || result.localName || result.deviceId;
         this.connectedDeviceId = result.deviceId;
 
         localStorage.setItem("savedDeviceId", result.deviceId);
@@ -177,6 +179,7 @@ async selectNewDevice() {
       this.updateUI("disconnected");
     }
   }
+  
   async connectNativeBLE(deviceId) {
     if (this.isConnecting) return;
 
