@@ -41,9 +41,9 @@
 │   │   └── showCrashReportModal()             # Вывод модалки с дампом этапа падения
 │   │
 │   ├── Sequential GATT Pipeline (Пошаговое рукопожатие без Race Conditions)
-│   │   ├── connect(deviceId)                  # Этап 1: BluetoothLe.connect() (задержка 500 мс)
-│   │   ├── discoverServices()                 # Этап 2: BluetoothLe.getServices() (задержка 400 мс)
-│   │   ├── requestMtu(mtuSize)                # Этап 3: Согласование MTU (до 247 байт, задержка 300 мс)
+│   │   ├── connect(deviceId)                  # Этап 1: BluetoothLe.connect()
+│   │   ├── discoverServices()                 # Этап 2: BluetoothLe.getServices()
+│   │   ├── requestMtu(mtuSize)                # Этап 3: Согласование MTU (до 247 байт)
 │   │   ├── startNotifications()               # Этап 4: Подписка на TX_UUID характеристику
 │   │   └── sendHandshake()                    # Этап 5: Передача кадра {"cmd":"get_sys"}
 │   │
@@ -75,29 +75,37 @@
 │           ├── Step 3: Manifest Patching      # Python-скрипт: внедрение Bluetooth Scan/Connect (Android 12+)
 │           └── Step 4: Gradle Assembly        # Сборка ./gradlew assembleDebug и обновление релиза 'latest'
 │
-└── esp32/
-    ├── main.ino                               # Главный скетч микроконтроллера
-    │   ├── Setup & Hardware Init
-    │   │   ├── setup()                        # Инициализация Serial, I2C Wire, U8g2 OLED и BLE Engine
-    │   │   └── displayInitScreen()            # Вывод стартового логотипа и состояния поиска BLE
-    │   │
-    │   ├── Main Loop Tasks
-    │   │   ├── loop()                         # Таймер 1 Гц для сбора системных метрик
-    │   │   ├── sendTelemetry()                # Формирование StaticJsonDocument и вызов ble.sendJson()
-    │   │   └── updateOLED()                   # Отрисовка статуса BLE, текущего MTU, счетчика и аптайма
-    │   │
-    │   └── Command Dispatcher
-    │       └── onRxCommand(JsonDocument& doc) # Разбор команд: "get_sys", "OTA_START" и кастомных UI команд
-    │
-    └── JE_BLE_Manager.h                       # C++ Ядро BLE (NimBLE Stack & OTA Engine)
-        ├── Constants & Config
-        │   ├── SERVICE_UUID / RX / TX         # UUIDs Nordic UART Service
-        │   ├── NOTIFY_DELAY_MS                # Пауза 10 мс между пакетами при нарезке JSON
-        │   └── MAX_RX_BUFFER                  # Размер приемного буфера с гарантией нуль-терминатора '\0'
-        │
-        └── class JE_BLE_Manager
-            ├── init(deviceName)               # Инициализация NimBLEServer, NUS и рекламных пакетов (Adv)
-            ├── sendJson(JsonDocument& doc)    # Сериализация JSON, нарезка под (peerMtu - 3) и отправка в TX
-            ├── handleOTAData(uint8_t* p, int) # Прямая запись сырых байт во флеш через Update.write()
-            ├── finishOTA(uint32_t expectedCrc)# Валидация размера/CRC32, Update.end() и ESP.restart()
-            └── ServerCallbacks                # Обработка событий подключения, отключения и согласования MTU
+├── esp32/
+│   ├── main.ino                               # Главный скетч микроконтроллера
+│   │   ├── Setup & Hardware Init
+│   │   │   ├── setup()                        # Инициализация Serial, I2C Wire, U8g2 OLED и BLE Engine
+│   │   │   └── displayInitScreen()            # Вывод стартового логотипа и состояния поиска BLE
+│   │   │
+│   │   ├── Main Loop Tasks
+│   │   │   ├── loop()                         # Таймер 1 Гц для сбора системных метрик
+│   │   │   ├── sendTelemetry()                # Формирование StaticJsonDocument и вызов ble.sendJson()
+│   │   │   └── updateOLED()                   # Отрисовка статуса BLE, текущего MTU, счетчика и аптайма
+│   │   │
+│   │   └── Command Dispatcher
+│   │       └── onRxCommand(JsonDocument& doc) # Разбор команд: "get_sys", "OTA_START" и кастомных UI команд
+│   │
+│   └── JE_BLE_Manager.h                       # C++ Ядро BLE (NimBLE Stack & OTA Engine)
+│       ├── Constants & Config
+│       │   ├── SERVICE_UUID / RX / TX         # UUIDs Nordic UART Service
+│       │   ├── NOTIFY_DELAY_MS                # Пауза 10 мс между пакетами при нарезке JSON
+│       │   └── MAX_RX_BUFFER                  # Размер приемного буфера с гарантией нуль-терминатора '\0'
+│       │
+│       └── class JE_BLE_Manager
+│           ├── init(deviceName)               # Инициализация NimBLEServer, NUS и рекламных пакетов (Adv)
+│           ├── sendJson(JsonDocument& doc)    # Сериализация JSON, нарезка под (peerMtu - 3) и отправка в TX
+│           ├── handleOTAData(uint8_t* p, int) # Прямая запись сырых байт во флеш через Update.write()
+│           ├── finishOTA(uint32_t expectedCrc)# Валидация размера/CRC32, Update.end() и ESP.restart()
+│           └── ServerCallbacks                # Обработка событий подключения, отключения и согласования MTU
+│
+└── [REMARK_BLE_RELIABILITY_RULES]             # Памятка-ремарк: 6 Золотых правил надежности BLE транспорта
+    ├── Rule 1: Event-Driven Execution         # Переход к след. шагу GATT строго по нативному событию/коллбэку, а не по таймеру
+    ├── Rule 2: Guard Intervals (50-100 ms)    # Паузы между асинхронными вызовами для очистки Event Loop драйвера Android
+    ├── Rule 3: Watchdog Safety Timeouts       # Жесткий таймаут (3-5 сек) на каждый вызов от зависания нативного стека
+    ├── Rule 4: Retry with Backoff             # Повторы GATT ошибок (133/257): до 3 попыток (100ms -> 300ms -> 700ms)
+    ├── Rule 5: Dynamic MTU Fallback           # Откат на дефолтные 23 байта при отказе MTU 247 без разрыва связи
+    └── Rule 6: Crash Guard FSM                # Запись шага в localStorage перед нативным API для отслеживания вылетов
