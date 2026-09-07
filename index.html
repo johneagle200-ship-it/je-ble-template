@@ -223,7 +223,6 @@
   <header class="app-header">
     <div class="header-left">
       <h2 id="appTitle">JE Device</h2>
-      <!-- Версия приложения привязана к appVersionHeader -->
       <span id="appVersionHeader" class="ver-badge">v1.0.0</span>
     </div>
 
@@ -298,7 +297,10 @@
     }
   </script>
 
+  <!-- Подключаем модули в порядке их зависимостей -->
+  <script src="AppUpdater.js"></script>
   <script src="BaseBLEDevice.js"></script>
+  <script src="BaseApp.js"></script>
   <script src="app.js"></script>
 
   <!-- Мобильная консоль разработчика Eruda -->
