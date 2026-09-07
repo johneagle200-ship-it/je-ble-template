@@ -326,6 +326,7 @@ class BaseBLEDevice {
   }
 
   // --- РАЗНЕСЕННОЕ ПОДКЛЮЧЕНИЕ С ИЗОЛИРОВАННЫМИ ОПЕРАЦИЯМИ ---
+// --- РАЗНЕСЕННОЕ ПОДКЛЮЧЕНИЕ С ИЗОЛИРОВАННЫМИ ОПЕРАЦИЯМИ ---
   async connectNativeBLE(deviceId) {
     if (this.isConnecting || !deviceId) return;
 
@@ -336,7 +337,6 @@ class BaseBLEDevice {
       clearTimeout(this.reconnectTimer);
       clearTimeout(this.stableTimer);
 
-      // Взводим флаг падения до начала операций
       localStorage.setItem("ble_crash_pending", "1");
 
       this.updateUI("connecting");
@@ -349,9 +349,22 @@ class BaseBLEDevice {
       await this.BluetoothLe.connect({ deviceId, timeout: 10000 });
 
       this._setCurrentStep("GATT_STABILIZING");
-      await this._delay(500); // Даем нативному стеку время зафиксировать соединение
+      await this._delay(500);
 
-      // 2. REQUEST MTU (Защищенная попытка)
+      // 2. DISCOVER SERVICES (Защита от NPE в Java/Android)
+      this._setCurrentStep("DISCOVER_SERVICES");
+      this._log("[BLE] Принудительный опрос GATT-сервисов...");
+      
+      try {
+        const servicesRes = await this.BluetoothLe.getServices({ deviceId });
+        this._log(`[BLE] Успешно закешировано сервисов: ${servicesRes?.services?.length || 0}`);
+      } catch (servErr) {
+        this._log(`[BLE] Ошибка при чтении сервисов: ${servErr?.message || servErr}`, "warn");
+      }
+
+      await this._delay(400);
+
+      // 3. REQUEST MTU (Выполняем ПОСЛЕ открытия сервисов)
       this._setCurrentStep("MTU_REQUEST");
       if (typeof this.BluetoothLe.requestMtu === 'function') {
         try {
@@ -363,10 +376,58 @@ class BaseBLEDevice {
         } catch (mtuErr) {
           this._log(`MTU отклонен (используем 23): ${mtuErr?.message || mtuErr}`, "warn");
         }
-      } else {
-        this._log("Метод requestMtu не поддерживается плагином, пропускаем.", "warn");
       }
 
+      await this._delay(300);
+
+      // 4. REGISTER LISTENERS
+      this._setCurrentStep("REGISTER_LISTENER");
+      if (!this.valueListener) {
+        this.valueListener = await this.BluetoothLe.addListener(
+          'characteristicValueReceived',
+          (result) => this._parseData(result)
+        );
+      }
+
+      await this._delay(300);
+
+      // 5. START NOTIFICATIONS
+      this._setCurrentStep("START_NOTIFICATIONS_EXEC");
+      await this.BluetoothLe.startNotifications({
+        deviceId,
+        service: this.serviceUuid,
+        characteristic: this.txUuid
+      });
+
+      await this._delay(500);
+
+      // 6. УСПЕШНОЕ ПОДКЛЮЧЕНИЕ
+      this._setCurrentStep("CONNECTED_WAITING_STABILITY");
+      this.updateUI("connected");
+
+      await this._delay(600);
+
+      // 7. ИЗОЛИРОВАННАЯ ОТПРАВКА СТАРТОВОЙ КОМАНДЫ
+      await this._safeSendHandshake();
+
+      this._setCurrentStep("OPERATIONAL_PENDING_GUARD");
+
+      this.stableTimer = setTimeout(() => {
+        if (this.connectedDeviceId && !this.isConnecting) {
+          this._log("[Crash Guard] Сессия стабильна (>5с). Флаг аварийного падения снят.");
+          localStorage.removeItem("ble_crash_pending");
+          this.autoConnectBlocked = false;
+          this._setCurrentStep("STABLE_OPERATIONAL");
+        }
+      }, this.minStableSessionMs);
+
+    } catch (err) {
+      this._log(`Ошибка подключения на шаге [${this.currentStep}]: ${err?.message || err}`, "error");
+      this.updateUI("disconnected");
+    } finally {
+      this.isConnecting = false;
+    }
+  }
       await this._delay(300);
 
       // 3. REGISTER LISTENERS
