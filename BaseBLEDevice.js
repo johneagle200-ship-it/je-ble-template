@@ -326,7 +326,6 @@ class BaseBLEDevice {
   }
 
   // --- РАЗНЕСЕННОЕ ПОДКЛЮЧЕНИЕ С ИЗОЛИРОВАННЫМИ ОПЕРАЦИЯМИ ---
-// --- РАЗНЕСЕННОЕ ПОДКЛЮЧЕНИЕ С ИЗОЛИРОВАННЫМИ ОПЕРАЦИЯМИ ---
   async connectNativeBLE(deviceId) {
     if (this.isConnecting || !deviceId) return;
 
@@ -351,7 +350,7 @@ class BaseBLEDevice {
       this._setCurrentStep("GATT_STABILIZING");
       await this._delay(500);
 
-      // 2. DISCOVER SERVICES (Защита от NPE в Java/Android)
+      // 2. DISCOVER SERVICES
       this._setCurrentStep("DISCOVER_SERVICES");
       this._log("[BLE] Принудительный опрос GATT-сервисов...");
       
@@ -364,7 +363,7 @@ class BaseBLEDevice {
 
       await this._delay(400);
 
-      // 3. REQUEST MTU (Выполняем ПОСЛЕ открытия сервисов)
+      // 3. REQUEST MTU
       this._setCurrentStep("MTU_REQUEST");
       if (typeof this.BluetoothLe.requestMtu === 'function') {
         try {
@@ -428,65 +427,6 @@ class BaseBLEDevice {
       this.isConnecting = false;
     }
   }
-      await this._delay(300);
-
-      // 3. REGISTER LISTENERS
-      this._setCurrentStep("REGISTER_LISTENER");
-      if (!this.valueListener) {
-        this.valueListener = await this.BluetoothLe.addListener(
-          'characteristicValueReceived',
-          (result) => this._parseData(result)
-        );
-      }
-
-      // Пауза, чтобы нативный JS-мост и поток Android успели связать слушатель
-      await this._delay(300);
-
-      // 4. START NOTIFICATIONS
-      this._setCurrentStep("START_NOTIFICATIONS_EXEC");
-      try {
-        // Убран превентивный stopNotifications, вызывавший нативный паник/NPE в Java-слое
-        await this.BluetoothLe.startNotifications({
-          deviceId,
-          service: this.serviceUuid,
-          characteristic: this.txUuid
-        });
-      } catch (notifErr) {
-        this._log(`Не удалось активировать TX notifications: ${notifErr?.message || notifErr}`, "error");
-        throw notifErr;
-      }
-
-      // Задержка на запись CCCD дескриптора (0x2902) в Android GATT stack
-      await this._delay(500);
-
-      // 5. ПЕРЕХОД В СОСТОЯНИЕ "ПОДКЛЮЧЕНО"
-      this._setCurrentStep("CONNECTED_WAITING_STABILITY");
-      this.updateUI("connected");
-
-      await this._delay(600); // Выдерживаем технологическую паузу перед записью
-
-      // 6. ИЗОЛИРОВАННАЯ И БЕЗОПАСНАЯ ОТПРАВКА СТАРТОВОЙ КОМАНДЫ
-      await this._safeSendHandshake();
-
-      this._setCurrentStep("OPERATIONAL_PENDING_GUARD");
-
-      // Снимаем флаг аварии только при сессии > 5 секунд без падения
-      this.stableTimer = setTimeout(() => {
-        if (this.connectedDeviceId && !this.isConnecting) {
-          this._log("[Crash Guard] Сессия стабильна (>5с). Флаг аварийного падения снят.");
-          localStorage.removeItem("ble_crash_pending");
-          this.autoConnectBlocked = false;
-          this._setCurrentStep("STABLE_OPERATIONAL");
-        }
-      }, this.minStableSessionMs);
-
-    } catch (err) {
-      this._log(`Ошибка подключения на шаге [${this.currentStep}]: ${err?.message || err}`, "error");
-      this.updateUI("disconnected");
-    } finally {
-      this.isConnecting = false;
-    }
-  }
 
   /**
    * Изолированный безопасный вызов get_sys с таймаутом
@@ -497,7 +437,6 @@ class BaseBLEDevice {
     try {
       const payload = JSON.stringify({ cmd: "get_sys" });
 
-      // Гонка между отправкой и таймаутом в 3 секунды
       await Promise.race([
         this.sendCmd(payload),
         new Promise((_, reject) =>
@@ -507,7 +446,6 @@ class BaseBLEDevice {
 
       this._log("[BLE] Запрос get_sys успешно передан устройству", "info");
     } catch (cmdErr) {
-      // Сбой запроса get_sys логгируется, но НЕ ломает статус подключения
       this._log(`[WARN] Ошибка/таймаут при отправке get_sys: ${cmdErr?.message || cmdErr}. Соединение сохранено.`, "warn");
     }
   }
@@ -517,7 +455,6 @@ class BaseBLEDevice {
     clearTimeout(this.reconnectTimer);
     clearTimeout(this.stableTimer);
     
-    // Ручное отключение не является сбоем — снимаем флаг
     localStorage.removeItem("ble_crash_pending");
     this.autoConnectBlocked = false;
 
