@@ -369,7 +369,7 @@ class BaseBLEDevice {
 
       await this._delay(300);
 
-      // 3. REGISTER LISTENERS & START NOTIFICATIONS
+      // 3. REGISTER LISTENERS
       this._setCurrentStep("REGISTER_LISTENER");
       if (!this.valueListener) {
         this.valueListener = await this.BluetoothLe.addListener(
@@ -378,14 +378,13 @@ class BaseBLEDevice {
         );
       }
 
-      this._setCurrentStep("START_NOTIFICATIONS");
-      try {
-        await this.BluetoothLe.stopNotifications({
-          deviceId,
-          service: this.serviceUuid,
-          characteristic: this.txUuid
-        }).catch(() => {});
+      // Пауза, чтобы нативный JS-мост и поток Android успели связать слушатель
+      await this._delay(300);
 
+      // 4. START NOTIFICATIONS
+      this._setCurrentStep("START_NOTIFICATIONS_EXEC");
+      try {
+        // Убран превентивный stopNotifications, вызывавший нативный паник/NPE в Java-слое
         await this.BluetoothLe.startNotifications({
           deviceId,
           service: this.serviceUuid,
@@ -396,15 +395,16 @@ class BaseBLEDevice {
         throw notifErr;
       }
 
-      await this._delay(400); // Пауза для регистрации дескрипторов в ОС
+      // Задержка на запись CCCD дескриптора (0x2902) в Android GATT stack
+      await this._delay(500);
 
-      // 4. ПЕРЕХОД В СОСТОЯНИЕ "ПОДКЛЮЧЕНО"
+      // 5. ПЕРЕХОД В СОСТОЯНИЕ "ПОДКЛЮЧЕНО"
       this._setCurrentStep("CONNECTED_WAITING_STABILITY");
       this.updateUI("connected");
 
       await this._delay(600); // Выдерживаем технологическую паузу перед записью
 
-      // 5. ИЗОЛИРОВАННАЯ И БЕЗОПАСНАЯ ОТПРАВКА СТАРТОВОЙ КОМАНДЫ
+      // 6. ИЗОЛИРОВАННАЯ И БЕЗОПАСНАЯ ОТПРАВКА СТАРТОВОЙ КОМАНДЫ
       await this._safeSendHandshake();
 
       this._setCurrentStep("OPERATIONAL_PENDING_GUARD");
@@ -631,7 +631,7 @@ class BaseBLEDevice {
       await this._sendBytes(bytes);
     } catch (e) {
       this._log(`Ошибка отправки команды: ${e?.message || e}`, "error");
-      throw e; // Пробрасываем ошибку наружу для обработки вызывающим методом
+      throw e;
     }
   }
 
