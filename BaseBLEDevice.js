@@ -80,6 +80,73 @@ class BaseBLEDevice {
     return logs.join("\n");
   }
 
+  // --- МОДАЛЬНОЕ ОКНО ДИАГНОСТИКИ СБОЕВ ---
+  showLogsModal() {
+    const existing = document.getElementById("ble-log-modal");
+    if (existing) existing.remove();
+
+    const lastStep = localStorage.getItem("ble_last_step") || "НЕИЗВЕСТНО";
+    const logsText = this.getDebugLogs().join("\n");
+
+    const modal = document.createElement("div");
+    modal.id = "ble-log-modal";
+    modal.style.cssText = `
+      position: fixed; top: 0; left: 0; width: 100vw; height: 100vh;
+      background: rgba(15, 15, 20, 0.98); z-index: 999999;
+      display: flex; flex-direction: column; padding: 16px; box-sizing: border-box;
+      font-family: monospace; color: #e0e0e0;
+    `;
+
+    modal.innerHTML = `
+      <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom: 10px;">
+        <h3 style="margin:0; color:#ff5555; font-size:16px;">⚠️ BLE Диагностика Сбоя</h3>
+        <span style="font-size:12px; color:#aaa;">Шаг: <b>${lastStep}</b></span>
+      </div>
+      
+      <textarea id="ble-log-textarea" readonly style="
+        flex: 1; width: 100%; background: #09090d; color: #00ff66;
+        border: 1px solid #333; border-radius: 6px; padding: 10px;
+        font-size: 11px; line-height: 1.4; resize: none; white-space: pre;
+        box-sizing: border-box; outline: none; -webkit-user-select: text; user-select: text;
+      ">${logsText}</textarea>
+
+      <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 10px;">
+        <button id="btn-copy-logs" style="padding:10px; background:#2563eb; color:#fff; border:none; border-radius:4px; font-weight:bold; cursor:pointer;">Скопировать лог</button>
+        <button id="btn-reset-crash" style="padding:10px; background:#d97706; color:#fff; border:none; border-radius:4px; font-weight:bold; cursor:pointer;">Сбросить защиту</button>
+        <button id="btn-clear-logs" style="padding:10px; background:#374151; color:#fff; border:none; border-radius:4px; cursor:pointer;">Очистить лог</button>
+        <button id="btn-close-modal" style="padding:10px; background:#4b5563; color:#fff; border:none; border-radius:4px; cursor:pointer;">Закрыть</button>
+      </div>
+    `;
+
+    document.body.appendChild(modal);
+
+    const textarea = document.getElementById("ble-log-textarea");
+    textarea.scrollTop = textarea.scrollHeight;
+
+    document.getElementById("btn-copy-logs").onclick = () => {
+      textarea.select();
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(logsText).then(() => alert("Лог скопирован!")).catch(() => document.execCommand('copy'));
+      } else {
+        document.execCommand('copy');
+        alert("Лог скопирован!");
+      }
+    };
+
+    document.getElementById("btn-reset-crash").onclick = () => {
+      this.resetCrashLock();
+      modal.remove();
+      alert("Блокировка снята. Можно подключаться.");
+    };
+
+    document.getElementById("btn-clear-logs").onclick = () => {
+      this.clearDebugLogs();
+      textarea.value = "";
+    };
+
+    document.getElementById("btn-close-modal").onclick = () => modal.remove();
+  }
+
   _setCurrentStep(stepName) {
     this.currentStep = stepName;
     localStorage.setItem("ble_last_step", stepName);
@@ -96,7 +163,6 @@ class BaseBLEDevice {
   async init() {
     this._log("[JE Core] Запуск процесса инициализации BLE...");
 
-    // ПРОВЕРКА: Если прошлый запуск завершился нативным крашем до истечения 5 секунд работы
     const crashPending = localStorage.getItem("ble_crash_pending");
     const lastStep = localStorage.getItem("ble_last_step") || "UNKNOWN";
 
@@ -104,7 +170,10 @@ class BaseBLEDevice {
       this.autoConnectBlocked = true;
       this._log(`[CRITICAL] Обнаружен нативный сбой при прошлом запуске!`, "error");
       this._log(`[CRITICAL] Сбой произошел на шаге: [${lastStep}]`, "error");
-      this._log("[Crash Guard] Автоподключение ЗАБЛОКИРОВАНО. Проверь логи методом .printDebugLogs()", "warn");
+      this._log("[Crash Guard] Автоподключение ЗАБЛОКИРОВАНО.", "warn");
+
+      // Открываем модальное окно с логами сразу при обнаружении краша
+      setTimeout(() => this.showLogsModal(), 300);
     }
 
     if (!this.BluetoothLe) {
@@ -252,7 +321,7 @@ class BaseBLEDevice {
     }
   }
   
-  // --- ПОДКЛЮЧЕНИЕ С ПЕССИМИСТИЧНОЙ УСТАНОВКОЙ ФЛАГА ---
+  // --- ПОДКЛЮЧЕНИЕ С БЕЗОПАСНЫМИ ВЫЗОВАМИ И ПЕССИМИСТИЧНЫМ ФЛАГОМ ---
   async connectNativeBLE(deviceId) {
     if (this.isConnecting || !deviceId) return;
 
@@ -278,16 +347,20 @@ class BaseBLEDevice {
       this._setCurrentStep("GATT_STABILIZING");
       await new Promise(r => setTimeout(r, 500));
 
-      // 2. MTU
+      // 2. MTU (С ПРОВЕРКОЙ НАЛИЧИЯ МЕТОДА)
       this._setCurrentStep("MTU_REQUEST");
-      try {
-        const mtuRes = await this.BluetoothLe.requestMtu({ deviceId, mtu: 247 });
-        if (mtuRes && mtuRes.mtu) {
-          this.currentMtu = mtuRes.mtu;
-          this._log(`Установлен MTU: ${this.currentMtu}`);
+      if (typeof this.BluetoothLe.requestMtu === 'function') {
+        try {
+          const mtuRes = await this.BluetoothLe.requestMtu({ deviceId, mtu: 247 });
+          if (mtuRes && mtuRes.mtu) {
+            this.currentMtu = mtuRes.mtu;
+            this._log(`Установлен MTU: ${this.currentMtu}`);
+          }
+        } catch (mtuErr) {
+          this._log(`MTU отклонен (используем 23): ${mtuErr?.message || mtuErr}`, "warn");
         }
-      } catch (mtuErr) {
-        this._log(`MTU отклонен (используем 23): ${mtuErr?.message || mtuErr}`, "warn");
+      } else {
+        this._log("Метод requestMtu не поддерживается плагином, пропускаем.", "warn");
       }
 
       await new Promise(r => setTimeout(r, 200));
