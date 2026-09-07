@@ -41,7 +41,7 @@ jobs:
       - name: Prepare Web Assets
         run: |
           mkdir -p www
-          cp index.html app.js BaseBLEDevice.js package.json manifest.json icon-*.png www/ 2>/dev/null || true
+          cp *.html *.js package.json manifest.json icon-*.png www/ 2>/dev/null || true
 
       - name: Add Android & Sync Capacitor
         run: |
