@@ -48,34 +48,42 @@ jobs:
           npx cap add android || true
           npx cap sync android
 
-      - name: Patch AndroidManifest.xml for BLE Permissions
+- name: Patch AndroidManifest.xml for BLE Permissions
         run: |
           python3 -c '
-          import re, os
+          import os
+
           path = "android/app/src/main/AndroidManifest.xml"
           if os.path.exists(path):
+              with open(path, "r", encoding="utf-8") as f:
+                  content = f.read()
+
+              # Добавляем пространство имен tools для возможности удаления maxSdkVersion
+              if "xmlns:tools=" not in content:
+                  content = content.replace("<manifest", "<manifest xmlns:tools=\"http://schemas.android.com/tools\"")
+
+              # Явно прописываем разрешения и удаляем ограничение maxSdkVersion="30"
               perms = """
-                  <uses-permission android:name="android.permission.BLUETOOTH" />
-                  <uses-permission android:name="android.permission.BLUETOOTH_ADMIN" />
-                  <uses-permission android:name="android.permission.BLUETOOTH_SCAN" />
+                  <uses-permission android:name="android.permission.BLUETOOTH" tools:remove="android:maxSdkVersion" />
+                  <uses-permission android:name="android.permission.BLUETOOTH_ADMIN" tools:remove="android:maxSdkVersion" />
+                  <uses-permission android:name="android.permission.BLUETOOTH_SCAN" tools:remove="android:maxSdkVersion" />
                   <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
                   <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
                   <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
                   <uses-feature android:name="android.hardware.bluetooth_le" android:required="true" />
               """
-              with open(path, "r", encoding="utf-8") as f:
-                  content = f.read()
 
-              content = re.sub(r"\s*<uses-permission android:name=\"android\.permission\.BLUETOOTH[^\"]*\"[^>]*/>", "", content)
-              content = re.sub(r"\s*<uses-permission android:name=\"android\.permission\.ACCESS_[^\"]*\"[^>]*/>", "", content)
-              content = re.sub(r"\s*<uses-feature android:name=\"android\.hardware\.bluetooth_le\"[^>]*/>", "", content)
+              # Удаляем старые записи разрешений во избежание дублирования
+              lines = content.splitlines()
+              filtered = [l for l in lines if not any(p in l for p in ["BLUETOOTH", "ACCESS_FINE_LOCATION", "ACCESS_COARSE_LOCATION", "bluetooth_le"])]
+              content = "\n".join(filtered)
 
-              content = content.replace("<application", perms + "\n    <application")
+              # Вставляем блок перед тегом <application
+              content = content.replace("<application", perms + "\n    <application", 1)
 
               with open(path, "w", encoding="utf-8") as f:
                   f.write(content)
           '
-
       - name: Replace Android App Icons
         run: |
           if [ -f icon-512.png ]; then
