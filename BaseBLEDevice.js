@@ -73,13 +73,14 @@ class BaseBLEDevice {
         if (el) el.innerText = savedName;
       }
 
-      const savedId = localStorage.getItem("savedDeviceId");
+      // --- АВТОПОДКЛЮЧЕНИЕ ВРЕМЕННО ОТКЛЮЧЕНО ДЛЯ ОТЛАДКИ ---
+      /*const savedId = localStorage.getItem("savedDeviceId");
       if (savedId) {
         console.log(`[JE Core] Найдено сохраненное ID: ${savedId}. Автоподключение...`);
         this.connectedDeviceId = savedId;
         this.isExplicitDisconnect = false;
         this.connectNativeBLE(savedId);
-      }
+      }*/
     } catch (e) {
       console.error("[JE Core] Ошибка при инициализации BLE:", e);
     }
