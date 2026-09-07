@@ -1,25 +1,52 @@
 class BaseApp {
   constructor(config) {
     this.updater = new AppUpdater(config);
-    // Наследуем BLE-функции из BaseBLEDevice
     this.ble = new BaseBLEDevice(config);
+
+    // Связываем передачу телеметрии в MainApp
+    if (this.ble) {
+      this.ble.onTelemetry = (data) => this.onTelemetry(data);
+    }
+
+    // Глобальный перехватчик JS-ошибок (выведет текст на экран вместо вылета)
+    window.onerror = (msg, url, line, col, error) => {
+      alert(`🚨 Ошибка JS:\n${msg}\nСтрока: ${line}:${col}`);
+      return true; // Предотвращает падение приложения
+    };
+
+    window.addEventListener('unhandledrejection', (event) => {
+      alert(`🚨 Необработанный Promise:\n${event.reason}`);
+    });
   }
 
   async init() {
-    // 1. Мгновенно выводим версию клиента
     await this.updater.init();
-
-    // 2. Инициализируем BLE
     if (this.ble && typeof this.ble.init === 'function') {
       await this.ble.init();
     }
   }
 
-  // Делегируем вызовы кнопок из index.html
+  onTelemetry(data) {} // Переопределяется в app.js
+
+  // Безопасный вызов подключения с отловом исключений
+  async connectOrReconnect() {
+    try {
+      await this.ble.connectOrReconnect();
+    } catch (err) {
+      alert(`🚨 Ошибка при подключении:\n${err.message || err}`);
+    }
+  }
+
+  async selectNewDevice() {
+    try {
+      await this.ble.selectNewDevice();
+    } catch (err) {
+      alert(`🚨 Ошибка выбора устройства:\n${err.message || err}`);
+    }
+  }
+
   checkForUpdates() { this.updater.checkForUpdates(); }
   updateApp() { this.updater.updateApp(); }
-  connectOrReconnect() { this.ble.connectOrReconnect(); }
   disconnectBLE() { this.ble.disconnectBLE(); }
-  selectNewDevice() { this.ble.selectNewDevice(); }
   updateESP32Firmware() { this.ble.updateESP32Firmware(); }
 }
