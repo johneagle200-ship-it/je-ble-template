@@ -48,9 +48,9 @@ jobs:
           npx cap add android || true
           npx cap sync android
 
-- name: Patch AndroidManifest.xml for BLE Permissions
+      - name: Patch AndroidManifest.xml for BLE Permissions
         run: |
-          python3 -c '
+          python3 - << 'EOF'
           import os
 
           path = "android/app/src/main/AndroidManifest.xml"
@@ -58,11 +58,9 @@ jobs:
               with open(path, "r", encoding="utf-8") as f:
                   content = f.read()
 
-              # Добавляем пространство имен tools для возможности удаления maxSdkVersion
               if "xmlns:tools=" not in content:
-                  content = content.replace("<manifest", "<manifest xmlns:tools=\"http://schemas.android.com/tools\"")
+                  content = content.replace("<manifest", '<manifest xmlns:tools="http://schemas.android.com/tools"')
 
-              # Явно прописываем разрешения и удаляем ограничение maxSdkVersion="30"
               perms = """
                   <uses-permission android:name="android.permission.BLUETOOTH" tools:remove="android:maxSdkVersion" />
                   <uses-permission android:name="android.permission.BLUETOOTH_ADMIN" tools:remove="android:maxSdkVersion" />
@@ -73,17 +71,16 @@ jobs:
                   <uses-feature android:name="android.hardware.bluetooth_le" android:required="true" />
               """
 
-              # Удаляем старые записи разрешений во избежание дублирования
               lines = content.splitlines()
               filtered = [l for l in lines if not any(p in l for p in ["BLUETOOTH", "ACCESS_FINE_LOCATION", "ACCESS_COARSE_LOCATION", "bluetooth_le"])]
               content = "\n".join(filtered)
 
-              # Вставляем блок перед тегом <application
               content = content.replace("<application", perms + "\n    <application", 1)
 
               with open(path, "w", encoding="utf-8") as f:
                   f.write(content)
-          '
+          EOF
+
       - name: Replace Android App Icons
         run: |
           if [ -f icon-512.png ]; then
@@ -101,7 +98,7 @@ jobs:
           sed -i -E "s/versionCode([ =]+)[0-9]+/versionCode\1${GITHUB_RUN_NUMBER}/g" android/app/build.gradle 2>/dev/null || true
           sed -i -E "s/versionCode([ =]+)[0-9]+/versionCode\1${GITHUB_RUN_NUMBER}/g" android/app/build.gradle.kts 2>/dev/null || true
 
-          python3 -c '
+          python3 - << 'EOF'
           import os
           path = "android/app/build.gradle"
           if os.path.exists(path):
@@ -122,7 +119,7 @@ jobs:
                   content = content.replace("buildTypes {", config + "\n    buildTypes {")
                   with open(path, "w", encoding="utf-8") as f:
                       f.write(content)
-          '
+          EOF
 
       - name: Build APK with Gradle
         run: |
