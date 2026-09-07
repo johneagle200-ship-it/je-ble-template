@@ -22,34 +22,16 @@ class AppUpdater {
   }
 
   async loadAppVersion() {
-    // 1. Пробуем прочитать локальный package.json (если упакован в webDir)
     try {
       const res = await fetch('./package.json');
-      if (res.ok) {
-        const pkg = await res.json();
-        if (pkg.version) {
-          this.currentVersion = pkg.version;
-          this.applyVersionUI(this.currentVersion);
-          return;
-        }
+      if (!res.ok) throw new Error(`HTTP Error ${res.status}`);
+      const pkg = await res.json();
+      if (pkg.version) {
+        this.currentVersion = pkg.version;
+        this.applyVersionUI(this.currentVersion);
       }
     } catch (e) {
-      console.warn('[AppUpdater] Локальный package.json недоступен в APK.');
-    }
-
-    // 2. Резервный вариант: подтягиваем версию из main-ветки GitHub
-    try {
-      const url = `https://raw.githubusercontent.com/${this.repoOwner}/${this.repoName}/main/package.json?t=${Date.now()}`;
-      const res = await fetch(url);
-      if (res.ok) {
-        const pkg = await res.json();
-        if (pkg.version) {
-          this.currentVersion = pkg.version;
-          this.applyVersionUI(this.currentVersion);
-        }
-      }
-    } catch (e) {
-      console.error('[AppUpdater] Не удалось получить версию:', e);
+      console.error('[AppUpdater] Ошибка чтения локального package.json:', e);
     }
   }
 
