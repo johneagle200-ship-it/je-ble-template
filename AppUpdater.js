@@ -1,43 +1,60 @@
 class AppUpdater {
   constructor(config = {}) {
-    this.repoOwner = config.repoOwner;
-    this.repoName = config.repoName;
+    this.repoOwner = config.repoOwner || "johneagle200-ship-it";
+    this.repoName = config.repoName || "je-ble-template";
     this.currentVersion = null;
   }
 
   async init() {
-    // 1. Читаем локальный package.json и обновляем UI
     await this.loadAppVersion();
-    
-    // 2. Сразу проверяем наличие новой версии на GitHub
     if (this.currentVersion) {
       this.checkForUpdates();
     }
   }
 
+  applyVersionUI(version) {
+    const verStr = `v${version}`;
+    const headerEl = document.getElementById('appVersionHeader');
+    const menuEl = document.getElementById('appVersion');
+
+    if (headerEl) headerEl.innerText = verStr;
+    if (menuEl) menuEl.innerText = verStr;
+  }
+
   async loadAppVersion() {
+    // 1. Пробуем прочитать локальный package.json (если упакован в webDir)
     try {
       const res = await fetch('./package.json');
-      if (!res.ok) throw new Error(`Status ${res.status}`);
-      
-      const pkg = await res.json();
-      if (pkg.version) {
-        this.currentVersion = pkg.version;
-        const verStr = `v${this.currentVersion}`;
-
-        const headerEl = document.getElementById('appVersionHeader');
-        const menuEl = document.getElementById('appVersion');
-
-        if (headerEl) headerEl.innerText = verStr;
-        if (menuEl) menuEl.innerText = verStr;
+      if (res.ok) {
+        const pkg = await res.json();
+        if (pkg.version) {
+          this.currentVersion = pkg.version;
+          this.applyVersionUI(this.currentVersion);
+          return;
+        }
       }
-    } catch (err) {
-      console.error('[AppUpdater] Ошибка чтения package.json:', err);
+    } catch (e) {
+      console.warn('[AppUpdater] Локальный package.json недоступен в APK.');
+    }
+
+    // 2. Резервный вариант: подтягиваем версию из main-ветки GitHub
+    try {
+      const url = `https://raw.githubusercontent.com/${this.repoOwner}/${this.repoName}/main/package.json?t=${Date.now()}`;
+      const res = await fetch(url);
+      if (res.ok) {
+        const pkg = await res.json();
+        if (pkg.version) {
+          this.currentVersion = pkg.version;
+          this.applyVersionUI(this.currentVersion);
+        }
+      }
+    } catch (e) {
+      console.error('[AppUpdater] Не удалось получить версию:', e);
     }
   }
 
   async checkForUpdates() {
-    if (!this.repoOwner || !this.repoName) return;
+    if (!this.repoOwner || !this.repoName || !this.currentVersion) return;
 
     try {
       const url = `https://raw.githubusercontent.com/${this.repoOwner}/${this.repoName}/main/package.json?t=${Date.now()}`;
