@@ -60,7 +60,7 @@ class BaseBLEDevice {
     try {
       const logs = JSON.parse(localStorage.getItem("ble_debug_logs") || "[]");
       logs.push(formatted);
-      if (logs.length > 100) logs.shift(); // Храним последние 100 записей
+      if (logs.length > 100) logs.shift();
       localStorage.setItem("ble_debug_logs", JSON.stringify(logs));
     } catch (e) {}
   }
@@ -78,14 +78,6 @@ class BaseBLEDevice {
     this._log("[JE Core] Журнал логов очищен.");
   }
 
-  printDebugLogs() {
-    const logs = this.getDebugLogs();
-    console.log("=== BLE DEBUG LOGS ===");
-    console.log(logs.join("\n"));
-    return logs.join("\n");
-  }
-
-  // --- МОДАЛЬНОЕ ОКНО ДИАГНОСТИКИ СБОЕВ ---
   showLogsModal() {
     const existing = document.getElementById("ble-log-modal");
     if (existing) existing.remove();
@@ -164,7 +156,7 @@ class BaseBLEDevice {
     this._log("[Crash Guard] Блокировка сбоя сброшена вручную.");
   }
 
-  // --- ИНИЦИАЛИЗАЦИЯ С ПРОВЕРКОЙ СБОЯ ---
+  // --- ИНИЦИАЛИЗАЦИЯ ---
   async init() {
     this._log("[JE Core] Запуск процесса инициализации BLE...");
 
@@ -219,7 +211,6 @@ class BaseBLEDevice {
         this._setElementText('deviceName', savedName);
       }
 
-      // АВТОПОДКЛЮЧЕНИЕ
       if (this.autoConnect && !this.autoConnectBlocked) {
         const savedId = localStorage.getItem("savedDeviceId");
         if (savedId) {
@@ -325,7 +316,7 @@ class BaseBLEDevice {
     }
   }
 
-  // --- РАЗНЕСЕННОЕ ПОДКЛЮЧЕНИЕ С ИЗОЛИРОВАННЫМИ ОПЕРАЦИЯМИ ---
+  // --- ПОДОГНАННЫЙ ПОД СТАБИЛЬНОСТЬ ПОШАГОВЫЙ ПАЙПЛАЙН ---
   async connectNativeBLE(deviceId) {
     if (this.isConnecting || !deviceId) return;
 
@@ -352,11 +343,11 @@ class BaseBLEDevice {
 
       // 2. DISCOVER SERVICES
       this._setCurrentStep("DISCOVER_SERVICES");
-      this._log("[BLE] Принудительный опрос GATT-сервисов...");
+      this._log("[BLE] Опрос GATT-сервисов...");
       
       try {
         const servicesRes = await this.BluetoothLe.getServices({ deviceId });
-        this._log(`[BLE] Успешно закешировано сервисов: ${servicesRes?.services?.length || 0}`);
+        this._log(`[BLE] Закешировано сервисов: ${servicesRes?.services?.length || 0}`);
       } catch (servErr) {
         this._log(`[BLE] Ошибка при чтении сервисов: ${servErr?.message || servErr}`, "warn");
       }
@@ -379,34 +370,43 @@ class BaseBLEDevice {
 
       await this._delay(300);
 
-      // 4. REGISTER LISTENERS
-      this._setCurrentStep("REGISTER_LISTENER");
+      // 4. REGISTER LISTENERS & START NOTIFICATIONS (С КОЛЛБЭКОМ)
+      this._setCurrentStep("START_NOTIFICATIONS_EXEC");
+      const notifHandler = (result) => this._parseData(result);
+
       if (!this.valueListener) {
-        this.valueListener = await this.BluetoothLe.addListener(
-          'characteristicValueReceived',
-          (result) => this._parseData(result)
-        );
+        try {
+          this.valueListener = await this.BluetoothLe.addListener(
+            'characteristicValueReceived',
+            notifHandler
+          );
+        } catch (e) {}
       }
 
-      await this._delay(300);
-
-      // 5. START NOTIFICATIONS
-      this._setCurrentStep("START_NOTIFICATIONS_EXEC");
-      await this.BluetoothLe.startNotifications({
-        deviceId,
-        service: this.serviceUuid,
-        characteristic: this.txUuid
-      });
+      try {
+        await this.BluetoothLe.startNotifications({
+          deviceId,
+          service: this.serviceUuid,
+          characteristic: this.txUuid
+        }, notifHandler);
+      } catch (notifErr) {
+        // Fallback для версий плагина с раздельным addListener
+        await this.BluetoothLe.startNotifications({
+          deviceId,
+          service: this.serviceUuid,
+          characteristic: this.txUuid
+        });
+      }
 
       await this._delay(500);
 
-      // 6. УСПЕШНОЕ ПОДКЛЮЧЕНИЕ
+      // 5. УСПЕШНОЕ ПОДКЛЮЧЕНИЕ
       this._setCurrentStep("CONNECTED_WAITING_STABILITY");
       this.updateUI("connected");
 
       await this._delay(600);
 
-      // 7. ИЗОЛИРОВАННАЯ ОТПРАВКА СТАРТОВОЙ КОМАНДЫ
+      // 6. ИЗОЛИРОВАННАЯ ОТПРАВКА СТАРТОВОЙ КОМАНДЫ
       await this._safeSendHandshake();
 
       this._setCurrentStep("OPERATIONAL_PENDING_GUARD");
@@ -428,9 +428,6 @@ class BaseBLEDevice {
     }
   }
 
-  /**
-   * Изолированный безопасный вызов get_sys с таймаутом
-   */
   async _safeSendHandshake() {
     this._setCurrentStep("SEND_GET_SYS");
 
@@ -486,6 +483,7 @@ class BaseBLEDevice {
     }, delayMs);
   }
 
+  // --- НАДЕЖНЫЙ ПАРСЕР ВХОДЯЩИХ ДАННЫХ (БЕЗ УПАДЕНИЙ) ---
   _parseData(result) {
     if (this.isOtaInProgress || !result) return;
 
@@ -502,14 +500,20 @@ class BaseBLEDevice {
       } else if (rawVal && rawVal.buffer instanceof ArrayBuffer) {
         bytes = new Uint8Array(rawVal.buffer, rawVal.byteOffset || 0, rawVal.byteLength || rawVal.buffer.byteLength);
       } else if (typeof rawVal === 'string') {
-        try {
-          const binaryString = window.atob(rawVal);
-          bytes = new Uint8Array(binaryString.length);
-          for (let i = 0; i < binaryString.length; i++) {
-            bytes[i] = binaryString.charCodeAt(i);
+        const cleanStr = rawVal.trim();
+        // ДЕКОДИРОВАНИЕ HEX-СТРОК
+        if (/^[0-9a-fA-F]+$/.test(cleanStr) && cleanStr.length % 2 === 0) {
+          bytes = new Uint8Array(cleanStr.match(/.{1,2}/g).map(b => parseInt(b, 16)));
+        } else {
+          try {
+            const binaryString = window.atob(cleanStr);
+            bytes = new Uint8Array(binaryString.length);
+            for (let i = 0; i < binaryString.length; i++) {
+              bytes[i] = binaryString.charCodeAt(i);
+            }
+          } catch (b64Err) {
+            bytes = new TextEncoder().encode(cleanStr);
           }
-        } catch (b64Err) {
-          bytes = new TextEncoder().encode(rawVal);
         }
       } else if (Array.isArray(rawVal)) {
         bytes = new Uint8Array(rawVal);
@@ -551,17 +555,16 @@ class BaseBLEDevice {
     }
   }
 
+  // --- БЕЗОПАСНАЯ ЗАПИСЬ В ХАРАКТЕРИСТИКУ (WRITE WITHOUT RESPONSE FIRST) ---
   async _writeRaw(options) {
-    try {
-      await this.BluetoothLe.write(options);
-      return true;
-    } catch (e1) {
-      if (typeof this.BluetoothLe.writeWithoutResponse === 'function') {
+    if (typeof this.BluetoothLe.writeWithoutResponse === 'function') {
+      try {
         await this.BluetoothLe.writeWithoutResponse(options);
         return true;
-      }
-      throw e1;
+      } catch (eNoResp) {}
     }
+    await this.BluetoothLe.write(options);
+    return true;
   }
 
   async _sendBytes(uint8Bytes) {
@@ -569,16 +572,19 @@ class BaseBLEDevice {
       throw new Error("Устройство не подключено");
     }
 
+    const uint8ToHex = (bytes) => Array.from(bytes).map(b => b.toString(16).padStart(2, '0')).join('');
+    const uint8ToBase64 = (bytes) => {
+      let binary = "";
+      for (let i = 0; i < bytes.byteLength; i++) {
+        binary += String.fromCharCode(bytes[i]);
+      }
+      return window.btoa(binary);
+    };
+
     const getVariant = (type) => {
       if (type === 'dataview') return new DataView(uint8Bytes.buffer, uint8Bytes.byteOffset, uint8Bytes.byteLength);
-      if (type === 'base64') {
-        let binary = "";
-        const len = uint8Bytes.byteLength;
-        for (let i = 0; i < len; i++) {
-          binary += String.fromCharCode(uint8Bytes[i]);
-        }
-        return window.btoa(binary);
-      }
+      if (type === 'hex') return uint8ToHex(uint8Bytes);
+      if (type === 'base64') return uint8ToBase64(uint8Bytes);
       if (type === 'array') return Array.from(uint8Bytes);
       return null;
     };
@@ -597,12 +603,15 @@ class BaseBLEDevice {
       }
     }
 
-    const formats = ['dataview', 'base64', 'array'];
+    // Безопасный перебор всех форматов
+    const formats = ['dataview', 'hex', 'base64', 'array'];
     let lastErr = null;
 
     for (const fmt of formats) {
       try {
         const val = getVariant(fmt);
+        if (!val) continue;
+
         await this._writeRaw({
           deviceId: this.connectedDeviceId,
           service: this.serviceUuid,
