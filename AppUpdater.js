@@ -1,28 +1,38 @@
 class AppUpdater {
-  constructor({ repoOwner, repoName }) {
-    this.repoOwner = repoOwner;
-    this.repoName = repoName;
+  constructor(config = {}) {
+    this.repoOwner = config.repoOwner;
+    this.repoName = config.repoName;
     this.currentVersion = null;
   }
 
   async init() {
+    // 1. Читаем локальный package.json и обновляем UI
     await this.loadAppVersion();
+    
+    // 2. Сразу проверяем наличие новой версии на GitHub
+    if (this.currentVersion) {
+      this.checkForUpdates();
+    }
   }
 
   async loadAppVersion() {
     try {
       const res = await fetch('./package.json');
+      if (!res.ok) throw new Error(`Status ${res.status}`);
+      
       const pkg = await res.json();
-      this.currentVersion = pkg.version;
-      const verStr = `v${pkg.version}`;
+      if (pkg.version) {
+        this.currentVersion = pkg.version;
+        const verStr = `v${this.currentVersion}`;
 
-      const headerEl = document.getElementById('appVersionHeader');
-      const menuEl = document.getElementById('appVersion');
+        const headerEl = document.getElementById('appVersionHeader');
+        const menuEl = document.getElementById('appVersion');
 
-      if (headerEl) headerEl.innerText = verStr;
-      if (menuEl) menuEl.innerText = verStr;
+        if (headerEl) headerEl.innerText = verStr;
+        if (menuEl) menuEl.innerText = verStr;
+      }
     } catch (err) {
-      console.error('AppUpdater: Ошибка чтения package.json', err);
+      console.error('[AppUpdater] Ошибка чтения package.json:', err);
     }
   }
 
@@ -32,18 +42,16 @@ class AppUpdater {
     try {
       const url = `https://raw.githubusercontent.com/${this.repoOwner}/${this.repoName}/main/package.json?t=${Date.now()}`;
       const res = await fetch(url);
-      if (!res.ok) throw new Error('Сбой сети при запросе к GitHub');
+      if (!res.ok) return;
 
       const remotePkg = await res.json();
       const remoteVer = remotePkg.version;
 
-      if (this.isNewerVersion(remoteVer, this.currentVersion)) {
+      if (remoteVer && this.isNewerVersion(remoteVer, this.currentVersion)) {
         this.showUpdateUI(remoteVer);
-      } else {
-        alert('У вас установлена последняя версия.');
       }
     } catch (err) {
-      console.error('AppUpdater: Ошибка проверки обновлений', err);
+      console.error('[AppUpdater] Ошибка проверки обновлений:', err);
     }
   }
 
@@ -64,13 +72,16 @@ class AppUpdater {
     const badge = document.getElementById('menuBadge');
     const notice = document.getElementById('updateNotice');
     const btnUpdateApp = document.getElementById('btnUpdateApp');
+    const textEl = document.getElementById('updateNoticeText');
 
+    if (textEl) textEl.innerText = `Доступно обновление приложения v${newVersion}!`;
     if (badge) badge.style.display = 'block';
     if (notice) notice.style.display = 'block';
     if (btnUpdateApp) btnUpdateApp.style.display = 'block';
   }
 
   updateApp() {
-    window.location.reload(true);
+    const apkUrl = `https://github.com/${this.repoOwner}/${this.repoName}/releases/download/latest/app-debug.apk`;
+    window.open(apkUrl, '_system');
   }
 }
