@@ -588,7 +588,7 @@ class BaseBLEDevice {
     return true;
   }
 
-  async _sendBytes(uint8Bytes) {
+async _sendBytes(uint8Bytes) {
     if (!this.connectedDeviceId || !this.BluetoothLe) {
       throw new Error("Устройство не подключено");
     }
@@ -603,9 +603,9 @@ class BaseBLEDevice {
     };
 
     const getVariant = (type) => {
+      if (type === 'hex') return uint8ToHex(uint8Bytes);
       if (type === 'base64') return uint8ToBase64(uint8Bytes);
       if (type === 'dataview') return new DataView(uint8Bytes.buffer, uint8Bytes.byteOffset, uint8Bytes.byteLength);
-      if (type === 'hex') return uint8ToHex(uint8Bytes);
       if (type === 'array') return Array.from(uint8Bytes);
       return null;
     };
@@ -624,7 +624,8 @@ class BaseBLEDevice {
       }
     }
 
-    const formats = ['base64', 'dataview', 'hex', 'array'];
+    // Сначала пробуем 'hex', так как нативный плагин BluetoothLe на Android ожидает именно hex-строку
+    const formats = ['hex', 'base64', 'dataview', 'array'];
     let lastErr = null;
 
     for (const fmt of formats) {
@@ -647,7 +648,7 @@ class BaseBLEDevice {
 
     throw lastErr || new Error("Все форматы записи отклонены плагином");
   }
-
+  
   async sendCmd(cmd) {
     if (!this.connectedDeviceId || !this.BluetoothLe) {
       throw new Error("Устройство не подключено");
