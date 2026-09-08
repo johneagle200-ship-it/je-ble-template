@@ -216,12 +216,29 @@
     button.btn-secondary { background: #3a3a3a; color: #eee; }
     button.btn-warning { background: #ff9800; color: #000; }
     hr.divider { border: 0; height: 1px; background: #333; margin: 16px 0; }
+
+    /* --- МОДАЛЬНОЕ ОКНО АВАРИЙНОГО ЛОГА (#crash-guard-modal) --- */
+    .modal-overlay {
+      position: fixed; 
+      top: 0; 
+      left: 0; 
+      width: 100vw; 
+      height: 100vh;
+      background: rgba(15, 15, 20, 0.98); 
+      z-index: 999999;
+      display: flex; 
+      flex-direction: column; 
+      padding: 16px; 
+      box-sizing: border-box;
+      font-family: monospace; 
+      color: #e0e0e0;
+    }
   </style>
 </head>
 <body>
 
-  <!-- Кнопка для вызова логов прошлого сеанса (при падении) -->
-  <button onclick="showCrashLog()" style="position: fixed; bottom: 85px; right: 16px; width: auto; padding: 8px 14px; font-size: 11px; background: #dc3545; z-index: 1000; border-radius: 20px; box-shadow: 0 4px 10px rgba(220,53,69,0.4);">📜 Логи падения</button>
+  <!-- Кнопка вызова логов BLE -->
+  <button onclick="app.ble.showLogsModal()" style="position: fixed; bottom: 85px; right: 16px; width: auto; padding: 8px 14px; font-size: 11px; background: #dc3545; z-index: 1000; border-radius: 20px; box-shadow: 0 4px 10px rgba(220,53,69,0.4);">📜 Журнал BLE</button>
 
   <header class="app-header">
     <div class="header-left">
@@ -291,6 +308,28 @@
     </div>
   </div>
 
+  <!-- #crash-guard-modal согласно ARCHITECTURE.md -->
+  <div id="crash-guard-modal" class="modal-overlay" style="display: none;">
+    <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom: 10px;">
+      <h3 style="margin:0; color:#ff5555; font-size:16px;">⚠️ BLE Диагностика Сбоя</h3>
+      <span style="font-size:12px; color:#aaa;">Шаг: <b id="crashLastStep">НЕИЗВЕСТНО</b></span>
+    </div>
+    
+    <textarea id="crashLogTextarea" readonly style="
+      flex: 1; width: 100%; background: #09090d; color: #00ff66;
+      border: 1px solid #333; border-radius: 6px; padding: 10px;
+      font-size: 11px; line-height: 1.4; resize: none; white-space: pre;
+      box-sizing: border-box; outline: none; -webkit-user-select: text; user-select: text;
+    "></textarea>
+
+    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 10px;">
+      <button id="btnCrashCopy" style="padding:10px; background:#2563eb; color:#fff; border:none; border-radius:4px; font-weight:bold; cursor:pointer;">Скопировать лог</button>
+      <button id="btnCrashReset" style="padding:10px; background:#d97706; color:#fff; border:none; border-radius:4px; font-weight:bold; cursor:pointer;">Сбросить защиту</button>
+      <button id="btnCrashClear" style="padding:10px; background:#374151; color:#fff; border:none; border-radius:4px; cursor:pointer;">Очистить лог</button>
+      <button id="btnCrashClose" style="padding:10px; background:#4b5563; color:#fff; border:none; border-radius:4px; cursor:pointer;">Закрыть</button>
+    </div>
+  </div>
+
   <script>
     function toggleMenu() {
       const menu = document.getElementById('settingsMenu');
@@ -298,58 +337,6 @@
         menu.style.display = (menu.style.display === 'none' || !menu.style.display) ? 'flex' : 'none';
       }
     }
-
-    // --- СИСТЕМА СОХРАНЕНИЯ ЛОГОВ ДО ПАДЕНИЯ ---
-    window.lastSessionLogs = [];
-
-    (function() {
-      try {
-        const saved = localStorage.getItem('app_crash_logs');
-        if (saved) {
-          window.lastSessionLogs = JSON.parse(saved);
-        }
-      } catch (e) {}
-      // Сбрасываем буфер для текущего сеанса
-      localStorage.setItem('app_crash_logs', JSON.stringify([]));
-    })();
-
-    function saveToPersistentLog(text) {
-      try {
-        let logs = JSON.parse(localStorage.getItem('app_crash_logs') || '[]');
-        logs.push(`[${new Date().toLocaleTimeString()}] ${text}`);
-        if (logs.length > 200) logs.shift();
-        localStorage.setItem('app_crash_logs', JSON.stringify(logs));
-      } catch (e) {}
-    }
-
-    function showCrashLog() {
-      if (window.lastSessionLogs && window.lastSessionLogs.length > 0) {
-        alert("Логи прошлого сеанса до падения:\n\n" + window.lastSessionLogs.slice(-25).join("\n"));
-      } else {
-        alert("Логи прошлого сеанса пусты (падений не зафиксировано).");
-      }
-    }
-
-    // Перехватываем консоль для записи в постоянную память
-    (function() {
-      const oldLog = console.log;
-      const oldError = console.error;
-      const oldWarn = console.warn;
-
-      console.log = function(...args) {
-        saveToPersistentLog("LOG: " + args.map(a => typeof a === 'object' ? JSON.stringify(a) : a).join(' '));
-        oldLog.apply(console, args);
-      };
-      console.warn = function(...args) {
-        saveToPersistentLog("WARN: " + args.map(a => typeof a === 'object' ? JSON.stringify(a) : a).join(' '));
-        oldWarn.apply(console, args);
-      };
-      console.error = function(...args) {
-        saveToPersistentLog("ERROR: " + args.map(a => typeof a === 'object' ? JSON.stringify(a) : a).join(' '));
-        oldError.apply(console, args);
-      };
-    })();
-    // ------------------------------------------
   </script>
 
   <script src="AppUpdater.js"></script>
