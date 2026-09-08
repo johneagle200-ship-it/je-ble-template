@@ -101,7 +101,7 @@ jobs:
         run: |
           cd android
           chmod +x gradlew
-          ./gradlew assembleDebug
+          ./gradlew assembleDebug -Pandroid.injected.testOnly=false
 
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
