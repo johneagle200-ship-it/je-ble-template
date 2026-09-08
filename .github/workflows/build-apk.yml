@@ -26,13 +26,11 @@ jobs:
           distribution: 'zulu'
           java-version: '17'
 
-      - name: Restore Fixed Keystore
-        env:
-          KEYSTORE_BASE64: ${{ secrets.DEBUG_KEYSTORE_BASE64 }}
+      - name: Setup Fixed Debug Keystore
         run: |
           mkdir -p ~/.android
-          if [ -n "$KEYSTORE_BASE64" ]; then
-            echo "$KEYSTORE_BASE64" | tr -d '\r\n' | base64 -d > ~/.android/debug.keystore
+          if [ -f debug.keystore ]; then
+            cp debug.keystore ~/.android/debug.keystore
           fi
 
       - name: Install Dependencies
@@ -47,6 +45,12 @@ jobs:
         run: |
           npx cap add android || true
           npx cap sync android
+
+      - name: Ensure Keystore in Android App Module
+        run: |
+          if [ -f debug.keystore ]; then
+            cp debug.keystore android/app/debug.keystore 2>/dev/null || true
+          fi
 
       - name: Patch AndroidManifest.xml for BLE Permissions
         run: |
