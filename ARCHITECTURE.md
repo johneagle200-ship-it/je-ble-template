@@ -1,3 +1,4 @@
+```
 .
 ├── index.html                                 # Единый UI приложения (Single Page Application)
 │   ├── #app-header                            # Статус подключения, имя устройства, индикатор RSSI/MTU
@@ -103,3 +104,4 @@
     ├── Rule 4: Retry with Backoff              # Повторы GATT ошибок (133/257): до 3 попыток (100ms -> 300ms -> 700ms)
     ├── Rule 5: Dynamic MTU Fallback           # Откат на дефолтные 23 байта при отказе MTU 247 без разрыва связи
     └── Rule 6: Crash Guard FSM                # Запись шага в localStorage перед нативным API для отслеживания вылетов
+```
