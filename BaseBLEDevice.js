@@ -221,6 +221,8 @@ class BaseBLEDevice {
   }
 
   async ensurePermissions() {
+    if (this.hasPermissions) return;
+
     try {
       if (typeof this.BluetoothLe.checkPermissions === 'function') {
         const status = await this.BluetoothLe.checkPermissions();
@@ -345,9 +347,24 @@ class BaseBLEDevice {
         this._log(`[BLE] Ошибка при чтении сервисов: ${servErr?.message || servErr}`, "warn");
       }
 
-      await this._delay(600);
+      await this._delay(500);
 
-      // 3. REGISTER LISTENERS & START NOTIFICATIONS (С ОБЯЗАТЕЛЬНОЙ ОЧИСТКОЙ СТАРОГО)
+      // 3. REQUEST MTU (Согласование максимального размера пакета)
+      this._setCurrentStep("REQUEST_MTU");
+      if (typeof this.BluetoothLe.requestMtu === 'function') {
+        try {
+          const mtuRes = await this.BluetoothLe.requestMtu({ deviceId, mtu: 247 });
+          if (mtuRes && mtuRes.mtu) {
+            this.currentMtu = mtuRes.mtu;
+            this._log(`[BLE] Согласован MTU: ${this.currentMtu}`);
+          }
+        } catch (mtuErr) {
+          this._log(`[BLE] MTU отклонен (остаемся на ${this.currentMtu}): ${mtuErr?.message || mtuErr}`, "warn");
+        }
+        await this._delay(400);
+      }
+
+      // 4. REGISTER LISTENERS & START NOTIFICATIONS (С ОБЯЗАТЕЛЬНОЙ ОЧИСТКОЙ СТАРОГО)
       this._setCurrentStep("START_NOTIFICATIONS_EXEC");
 
       if (this.valueListener) {
@@ -388,31 +405,16 @@ class BaseBLEDevice {
 
       await this._delay(800); // Guard Interval после подписки
 
-      // 4. УСПЕШНОЕ ПОДКЛЮЧЕНИЕ
+      // 5. УСПЕШНОЕ ПОДКЛЮЧЕНИЕ
       this._setCurrentStep("CONNECTED_WAITING_STABILITY");
       this.updateUI("connected");
 
       await this._delay(500);
 
-      // 5. ИЗОЛИРОВАННАЯ ОТПРАВКА СТАРТОВОЙ КОМАНДЫ
+      // 6. ИЗОЛИРОВАННАЯ ОТПРАВКА СТАРТОВОЙ КОМАНДЫ
       await this._safeSendHandshake();
 
       this._setCurrentStep("OPERATIONAL_PENDING_GUARD");
-
-      // Безопасный фоновый запрос MTU (вынесен из критической цепочки запуска)
-      setTimeout(async () => {
-        if (typeof this.BluetoothLe.requestMtu === 'function' && this.connectedDeviceId) {
-          try {
-            const mtuRes = await this.BluetoothLe.requestMtu({ deviceId, mtu: 247 });
-            if (mtuRes && mtuRes.mtu) {
-              this.currentMtu = mtuRes.mtu;
-              this._log(`[Фон] Установлен MTU: ${this.currentMtu}`);
-            }
-          } catch (mtuErr) {
-            this._log(`[Фон] MTU отклонен (остаемся на ${this.currentMtu}): ${mtuErr?.message || mtuErr}`, "warn");
-          }
-        }
-      }, 2000);
 
       this.stableTimer = setTimeout(() => {
         if (this.connectedDeviceId && !this.isConnecting) {
@@ -495,7 +497,7 @@ class BaseBLEDevice {
   }
 
   // --- НАДЕЖНЫЙ ПАРСЕР ВХОДЯЩИХ ДАННЫХ ---
-_parseData(result) {
+  _parseData(result) {
     this._log(`[RX RAW] -> ${JSON.stringify(result)}`);
 
     if (this.isOtaInProgress || !result) return;
@@ -514,7 +516,6 @@ _parseData(result) {
         bytes = new Uint8Array(rawVal.buffer, rawVal.byteOffset || 0, rawVal.byteLength || rawVal.buffer.byteLength);
       } else if (typeof rawVal === 'string') {
         const cleanStr = rawVal.trim();
-        // Надежная конвертация hex-строки (даже если есть пробелы или регистр плавает)
         const hexOnly = cleanStr.replace(/[^0-9a-fA-F]/g, '');
         if (hexOnly.length > 0 && hexOnly.length % 2 === 0) {
           bytes = new Uint8Array(hexOnly.match(/.{1,2}/g).map(b => parseInt(b, 16)));
@@ -577,6 +578,7 @@ _parseData(result) {
       this._log(`Ошибка в _parseData: ${e?.message || e}`, "error");
     }
   }
+
   // --- БЕЗОПАСНАЯ ЗАПИСЬ В ХАРАКТЕРИСТИКУ ---
   async _writeRaw(options) {
     if (typeof this.BluetoothLe.writeWithoutResponse === 'function') {
@@ -589,7 +591,7 @@ _parseData(result) {
     return true;
   }
 
-async _sendBytes(uint8Bytes) {
+  async _sendBytes(uint8Bytes) {
     if (!this.connectedDeviceId || !this.BluetoothLe) {
       throw new Error("Устройство не подключено");
     }
@@ -625,7 +627,6 @@ async _sendBytes(uint8Bytes) {
       }
     }
 
-    // Сначала пробуем 'hex', так как нативный плагин BluetoothLe на Android ожидает именно hex-строку
     const formats = ['hex', 'base64', 'dataview', 'array'];
     let lastErr = null;
 
