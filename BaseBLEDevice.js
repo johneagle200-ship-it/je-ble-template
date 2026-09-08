@@ -26,7 +26,7 @@ class BaseBLEDevice {
     this.hasPermissions = false;
 
     this.rxBuffer = "";
-    this.streamDecoder = new TextDecoder('utf-8');
+    this.streamDecoder = new TextDecoder('utf-8', { fatal: false });
     this.maxBufferSize = config.maxBufferSize || 16384;
     this.currentMtu = 23;
 
@@ -324,7 +324,7 @@ class BaseBLEDevice {
 
       this.updateUI("connecting");
       this.rxBuffer = "";
-      this.streamDecoder = new TextDecoder('utf-8');
+      this.streamDecoder = new TextDecoder('utf-8', { fatal: false });
       this.currentMtu = 23;
 
       // 1. GATT CONNECT
@@ -332,7 +332,7 @@ class BaseBLEDevice {
       await this.BluetoothLe.connect({ deviceId, timeout: 10000 });
 
       this._setCurrentStep("GATT_STABILIZING");
-      await this._delay(600); // Guard Interval для очистки нативного Event Loop
+      await this._delay(800); // Guard Interval для очистки нативного Event Loop
 
       // 2. DISCOVER SERVICES
       this._setCurrentStep("DISCOVER_SERVICES");
@@ -345,43 +345,31 @@ class BaseBLEDevice {
         this._log(`[BLE] Ошибка при чтении сервисов: ${servErr?.message || servErr}`, "warn");
       }
 
-      await this._delay(500);
+      await this._delay(600);
 
-      // 3. REQUEST MTU
-      this._setCurrentStep("MTU_REQUEST");
-      if (typeof this.BluetoothLe.requestMtu === 'function') {
-        try {
-          const mtuRes = await this.BluetoothLe.requestMtu({ deviceId, mtu: 247 });
-          if (mtuRes && mtuRes.mtu) {
-            this.currentMtu = mtuRes.mtu;
-            this._log(`Установлен MTU: ${this.currentMtu}`);
-          }
-        } catch (mtuErr) {
-          this._log(`MTU отклонен (используем 23): ${mtuErr?.message || mtuErr}`, "warn");
-        }
-      }
-
-      await this._delay(500);
-
-      // 4. REGISTER LISTENERS & START NOTIFICATIONS (СТРОГО 1 ОБЪЕКТ)
+      // 3. REGISTER LISTENERS & START NOTIFICATIONS (С ОБЯЗАТЕЛЬНОЙ ОЧИСТКОЙ СТАРОГО)
       this._setCurrentStep("START_NOTIFICATIONS_EXEC");
 
-      if (!this.valueListener) {
+      if (this.valueListener) {
         try {
-          this.valueListener = await this.BluetoothLe.addListener(
-            'characteristicValueReceived',
-            (result) => this._parseData(result)
-          );
-          this._log("[BLE] Слушатель событий успешно зарегистрирован.");
-        } catch (listenErr) {
-          this._log(`[WARN] Ошибка при добавлении addListener: ${listenErr?.message || listenErr}`, "warn");
-        }
+          await this.valueListener.remove();
+        } catch (e) {}
+        this.valueListener = null;
       }
 
-      await this._delay(300);
+      try {
+        this.valueListener = await this.BluetoothLe.addListener(
+          'characteristicValueReceived',
+          (result) => this._parseData(result)
+        );
+        this._log("[BLE] Слушатель событий успешно зарегистрирован.");
+      } catch (listenErr) {
+        this._log(`[WARN] Ошибка при добавлении addListener: ${listenErr?.message || listenErr}`, "warn");
+      }
+
+      await this._delay(400);
 
       try {
-        // Вызов startNotifications строго с одним объектом!
         await this.BluetoothLe.startNotifications({
           deviceId,
           service: this.serviceUuid,
@@ -390,7 +378,7 @@ class BaseBLEDevice {
         this._log("[BLE] Подписка startNotifications успешно активирована.");
       } catch (notifErr) {
         this._log(`[WARN] Ошибка при вызове startNotifications: ${notifErr?.message || notifErr}`, "warn");
-        await this._delay(500);
+        await this._delay(600);
         await this.BluetoothLe.startNotifications({
           deviceId,
           service: this.serviceUuid,
@@ -398,18 +386,33 @@ class BaseBLEDevice {
         });
       }
 
-      await this._delay(500);
+      await this._delay(800); // Guard Interval после подписки
 
-      // 5. УСПЕШНОЕ ПОДКЛЮЧЕНИЕ
+      // 4. УСПЕШНОЕ ПОДКЛЮЧЕНИЕ
       this._setCurrentStep("CONNECTED_WAITING_STABILITY");
       this.updateUI("connected");
 
-      await this._delay(600);
+      await this._delay(500);
 
-      // 6. ИЗОЛИРОВАННАЯ ОТПРАВКА СТАРТОВОЙ КОМАНДЫ
+      // 5. ИЗОЛИРОВАННАЯ ОТПРАВКА СТАРТОВОЙ КОМАНДЫ
       await this._safeSendHandshake();
 
       this._setCurrentStep("OPERATIONAL_PENDING_GUARD");
+
+      // Безопасный фоновый запрос MTU (вынесен из критической цепочки запуска)
+      setTimeout(async () => {
+        if (typeof this.BluetoothLe.requestMtu === 'function' && this.connectedDeviceId) {
+          try {
+            const mtuRes = await this.BluetoothLe.requestMtu({ deviceId, mtu: 247 });
+            if (mtuRes && mtuRes.mtu) {
+              this.currentMtu = mtuRes.mtu;
+              this._log(`[Фон] Установлен MTU: ${this.currentMtu}`);
+            }
+          } catch (mtuErr) {
+            this._log(`[Фон] MTU отклонен (остаемся на ${this.currentMtu}): ${mtuErr?.message || mtuErr}`, "warn");
+          }
+        }
+      }, 2000);
 
       this.stableTimer = setTimeout(() => {
         if (this.connectedDeviceId && !this.isConnecting) {
@@ -456,6 +459,14 @@ class BaseBLEDevice {
     this.autoConnectBlocked = false;
 
     this._setCurrentStep("DISCONNECTING");
+
+    if (this.valueListener) {
+      try {
+        await this.valueListener.remove();
+      } catch (e) {}
+      this.valueListener = null;
+    }
+
     if (this.connectedDeviceId && this.BluetoothLe) {
       try { 
         await this.BluetoothLe.stopNotifications({
@@ -524,7 +535,15 @@ class BaseBLEDevice {
         return;
       }
 
-      this.rxBuffer += this.streamDecoder.decode(bytes, { stream: true });
+      let chunk = "";
+      try {
+        chunk = this.streamDecoder.decode(bytes, { stream: true });
+      } catch (decErr) {
+        this.streamDecoder = new TextDecoder('utf-8', { fatal: false });
+        return;
+      }
+
+      this.rxBuffer += chunk;
 
       if (this.rxBuffer.length > this.maxBufferSize) {
         this._log("Буфер переполнен, сброс!", "warn");
