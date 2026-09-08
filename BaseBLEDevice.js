@@ -495,7 +495,7 @@ class BaseBLEDevice {
   }
 
   // --- НАДЕЖНЫЙ ПАРСЕР ВХОДЯЩИХ ДАННЫХ ---
-  _parseData(result) {
+_parseData(result) {
     this._log(`[RX RAW] -> ${JSON.stringify(result)}`);
 
     if (this.isOtaInProgress || !result) return;
@@ -514,8 +514,10 @@ class BaseBLEDevice {
         bytes = new Uint8Array(rawVal.buffer, rawVal.byteOffset || 0, rawVal.byteLength || rawVal.buffer.byteLength);
       } else if (typeof rawVal === 'string') {
         const cleanStr = rawVal.trim();
-        if (/^[0-9a-fA-F]+$/.test(cleanStr) && cleanStr.length % 2 === 0) {
-          bytes = new Uint8Array(cleanStr.match(/.{1,2}/g).map(b => parseInt(b, 16)));
+        // Надежная конвертация hex-строки (даже если есть пробелы или регистр плавает)
+        const hexOnly = cleanStr.replace(/[^0-9a-fA-F]/g, '');
+        if (hexOnly.length > 0 && hexOnly.length % 2 === 0) {
+          bytes = new Uint8Array(hexOnly.match(/.{1,2}/g).map(b => parseInt(b, 16)));
         } else {
           try {
             const binaryString = window.atob(cleanStr);
@@ -575,7 +577,6 @@ class BaseBLEDevice {
       this._log(`Ошибка в _parseData: ${e?.message || e}`, "error");
     }
   }
-
   // --- БЕЗОПАСНАЯ ЗАПИСЬ В ХАРАКТЕРИСТИКУ ---
   async _writeRaw(options) {
     if (typeof this.BluetoothLe.writeWithoutResponse === 'function') {
