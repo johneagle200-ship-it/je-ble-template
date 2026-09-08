@@ -43,7 +43,7 @@ class BaseBLEDevice {
     this._log("[JE Core] Модуль BaseBLEDevice инициализирован.");
   }
 
-  // --- ВСПОМОГАТЕЛЬНАЯ ЗАДЕРЖКА ---
+  // --- ВСПОМОГАТЕЛЬНАЯ ЗАДЕРЖКА (Guard Interval) ---
   _delay(ms) {
     return new Promise((resolve) => setTimeout(resolve, ms));
   }
@@ -60,7 +60,7 @@ class BaseBLEDevice {
     try {
       const logs = JSON.parse(localStorage.getItem("ble_debug_logs") || "[]");
       logs.push(formatted);
-      if (logs.length > 100) logs.shift();
+      if (logs.length > 100) logs.shift(); // Храним последние 100 записей
       localStorage.setItem("ble_debug_logs", JSON.stringify(logs));
     } catch (e) {}
   }
@@ -332,7 +332,7 @@ class BaseBLEDevice {
       await this.BluetoothLe.connect({ deviceId, timeout: 10000 });
 
       this._setCurrentStep("GATT_STABILIZING");
-      await this._delay(500);
+      await this._delay(600); // Guard Interval для очистки нативного Event Loop
 
       // 2. DISCOVER SERVICES
       this._setCurrentStep("DISCOVER_SERVICES");
@@ -345,7 +345,7 @@ class BaseBLEDevice {
         this._log(`[BLE] Ошибка при чтении сервисов: ${servErr?.message || servErr}`, "warn");
       }
 
-      await this._delay(400);
+      await this._delay(500);
 
       // 3. REQUEST MTU
       this._setCurrentStep("MTU_REQUEST");
@@ -361,28 +361,36 @@ class BaseBLEDevice {
         }
       }
 
-      await this._delay(300);
+      await this._delay(500);
 
-      // 4. REGISTER LISTENERS & START NOTIFICATIONS (С КОЛЛБЭКОМ)
+      // 4. REGISTER LISTENERS & START NOTIFICATIONS (СТРОГО 1 ОБЪЕКТ)
       this._setCurrentStep("START_NOTIFICATIONS_EXEC");
-      const notifHandler = (result) => this._parseData(result);
 
       if (!this.valueListener) {
         try {
           this.valueListener = await this.BluetoothLe.addListener(
             'characteristicValueReceived',
-            notifHandler
+            (result) => this._parseData(result)
           );
-        } catch (e) {}
+          this._log("[BLE] Слушатель событий успешно зарегистрирован.");
+        } catch (listenErr) {
+          this._log(`[WARN] Ошибка при добавлении addListener: ${listenErr?.message || listenErr}`, "warn");
+        }
       }
 
+      await this._delay(300);
+
       try {
+        // Вызов startNotifications строго с одним объектом!
         await this.BluetoothLe.startNotifications({
           deviceId,
           service: this.serviceUuid,
           characteristic: this.txUuid
-        }, notifHandler);
+        });
+        this._log("[BLE] Подписка startNotifications успешно активирована.");
       } catch (notifErr) {
+        this._log(`[WARN] Ошибка при вызове startNotifications: ${notifErr?.message || notifErr}`, "warn");
+        await this._delay(500);
         await this.BluetoothLe.startNotifications({
           deviceId,
           service: this.serviceUuid,
