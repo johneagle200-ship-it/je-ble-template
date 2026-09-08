@@ -1,10 +1,3 @@
-# ARCHITECTURE.md — JE BLE Template (Unified Technical Blueprint)
-
-Единый файл архитектуры системы. Содержит полную иерархическую структуру файлов, интерфейсов, функций, процедур и протоколов связи для сохранения контекста при редактировании отдельных модулей.
-
-================================================================================
-
-```text
 .
 ├── index.html                                 # Единый UI приложения (Single Page Application)
 │   ├── #app-header                            # Статус подключения, имя устройства, индикатор RSSI/MTU
@@ -66,12 +59,13 @@
 │
 ├── package.json                               # Метаданные проекта, версия (SemVer) и npm-зависимости
 ├── capacitor.config.json                      # Конфигурация мобильного контейнера (appId, webDir)
+├── debug.keystore                             # Локальный/CI ключ подписи Android (Debug Keystore для Gradle)
 │
 ├── .github/
 │   └── workflows/
 │       └── build-apk.yml                      # CI/CD автоматизация сборки Android
 │           ├── Step 1: Environment Setup      # Развертывание Ubuntu, Node.js 20, Java JDK 17 (Zulu)
-│           ├── Step 2: Keystore Restoring     # Декодирование DEBUG_KEYSTORE_BASE64 из секретов
+│           ├── Step 2: Keystore Restoring     # Использование debug.keystore из репозитория или секретов
 │           ├── Step 3: Manifest Patching      # Python-скрипт: внедрение Bluetooth Scan/Connect (Android 12+)
 │           └── Step 4: Gradle Assembly        # Сборка ./gradlew assembleDebug и обновление релиза 'latest'
 │
@@ -106,6 +100,6 @@
     ├── Rule 1: Event-Driven Execution         # Переход к след. шагу GATT строго по нативному событию/коллбэку, а не по таймеру
     ├── Rule 2: Guard Intervals (50-100 ms)    # Паузы между асинхронными вызовами для очистки Event Loop драйвера Android
     ├── Rule 3: Watchdog Safety Timeouts       # Жесткий таймаут (3-5 сек) на каждый вызов от зависания нативного стека
-    ├── Rule 4: Retry with Backoff             # Повторы GATT ошибок (133/257): до 3 попыток (100ms -> 300ms -> 700ms)
+    ├── Rule 4: Retry with Backoff              # Повторы GATT ошибок (133/257): до 3 попыток (100ms -> 300ms -> 700ms)
     ├── Rule 5: Dynamic MTU Fallback           # Откат на дефолтные 23 байта при отказе MTU 247 без разрыва связи
     └── Rule 6: Crash Guard FSM                # Запись шага в localStorage перед нативным API для отслеживания вылетов
