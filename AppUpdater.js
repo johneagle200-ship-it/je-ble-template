@@ -8,7 +8,8 @@ class AppUpdater {
   async init() {
     await this.loadAppVersion();
     if (this.currentVersion) {
-      this.checkForUpdates();
+      // Пауза 2с для полной инициализации сетевого стека Android
+      setTimeout(() => this.checkForUpdates(), 2000);
     }
   }
 
@@ -31,7 +32,7 @@ class AppUpdater {
         this.applyVersionUI(this.currentVersion);
       }
     } catch (e) {
-      console.error('[AppUpdater] Ошибка чтения локального package.json:', e);
+      console.warn('[AppUpdater] Ошибка чтения локального package.json:', e?.message || e);
     }
   }
 
@@ -50,7 +51,7 @@ class AppUpdater {
         this.showUpdateUI(remoteVer);
       }
     } catch (err) {
-      console.error('[AppUpdater] Ошибка проверки обновлений:', err);
+      console.warn('[AppUpdater] Ошибка/таймаут проверки обновлений:', err?.message || err);
     }
   }
 
@@ -76,11 +77,25 @@ class AppUpdater {
     if (textEl) textEl.innerText = `Доступно обновление приложения v${newVersion}!`;
     if (badge) badge.style.display = 'block';
     if (notice) notice.style.display = 'block';
-    if (btnUpdateApp) btnUpdateApp.style.display = 'block';
+    if (btnUpdateApp) {
+      btnUpdateApp.style.display = 'block';
+      btnUpdateApp.onclick = () => this.updateApp();
+    }
   }
 
-  updateApp() {
+  async updateApp() {
     const apkUrl = `https://github.com/${this.repoOwner}/${this.repoName}/releases/download/latest/app-debug.apk`;
+    
+    const capacitorBrowser = window.Capacitor?.Plugins?.Browser;
+    if (capacitorBrowser && typeof capacitorBrowser.open === 'function') {
+      try {
+        await capacitorBrowser.open({ url: apkUrl });
+        return;
+      } catch (e) {
+        console.warn('[AppUpdater] Ошибка Capacitor Browser, откат на window.open:', e);
+      }
+    }
+
     window.open(apkUrl, '_system');
   }
 }
