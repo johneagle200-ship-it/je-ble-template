@@ -533,29 +533,40 @@ class BaseBLEDevice {
       try {
         chunk = this.streamDecoder.decode(bytes, { stream: true });
       } catch (decErr) {
+        this._log(`[RX ERROR] Ошибка декодирования потока: ${decErr?.message || decErr}`, "warn");
         this.streamDecoder = new TextDecoder('utf-8', { fatal: false });
         return;
       }
 
       this.rxBuffer += chunk;
+      this._log(`[RX BUFFER] Текущая длина буфера: ${this.rxBuffer.length}, Буфер: "${this.rxBuffer}"`, "info");
 
       if (this.rxBuffer.length > this.maxBufferSize) {
-        this._log("Буфер переполнен, сброс!", "warn");
+        this._log("[RX ERROR] Буфер переполнен, сброс!", "warn");
         this.rxBuffer = "";
         return;
       }
 
       // Выделяем валидный JSON по закрывающей фигурной скобке '}'
       let idx;
+      let parsedCount = 0;
       while ((idx = this.rxBuffer.indexOf('}')) !== -1) {
         const candidate = this.rxBuffer.substring(0, idx + 1).trim();
         this.rxBuffer = this.rxBuffer.substring(idx + 1);
 
-        if (!candidate || !candidate.startsWith('{')) continue;
+        if (!candidate || !candidate.startsWith('{')) {
+          this._log(`[RX WARN] Пропущен некорректный кандидат JSON: "${candidate}"`, "warn");
+          continue;
+        }
 
         try {
           const data = JSON.parse(candidate);
-          this._log(`[RX JSON] -> ${candidate}`);
+          parsedCount++;
+          this._log(`[RX JSON #${parsedCount}] Успешно распарсено: ${candidate}`);
+
+          if (data.counter !== undefined || data.cnt !== undefined) {
+            this._log(`[COUNTER] Получено значение счётчика: ${data.counter ?? data.cnt}`, "info");
+          }
 
           if (data.sys) {
             this.espFwVersion = typeof data.sys === 'object' ? data.sys.fw : data.sys;
@@ -564,11 +575,11 @@ class BaseBLEDevice {
 
           this.onTelemetry(data);
         } catch (e) {
-          this._log(`Ошибка парсинга JSON: ${candidate}`, "warn");
+          this._log(`[RX ERROR] Ошибка JSON.parse для кандидата: "${candidate}". Ошибка: ${e.message}`, "warn");
         }
       }
     } catch (e) {
-      this._log(`Ошибка в _parseData: ${e?.message || e}`, "error");
+      this._log(`[RX FATAL] Ошибка в _parseData: ${e?.message || e}`, "error");
     }
   }
 
@@ -587,6 +598,8 @@ class BaseBLEDevice {
     if (!this.connectedDeviceId || !this.BluetoothLe) {
       throw new Error("Устройство не подключено");
     }
+
+    this._log(`[TX BYTES] Отправка ${uint8Bytes.length} байт`);
 
     const uint8ToHex = (bytes) => Array.from(bytes).map(b => b.toString(16).padStart(2, '0')).join('');
     const uint8ToBase64 = (bytes) => {
@@ -613,8 +626,10 @@ class BaseBLEDevice {
           characteristic: this.rxUuid,
           value: getVariant(this.preferredWriteFormat)
         });
+        this._log(`[TX OK] Успешно отправлено в формате: ${this.preferredWriteFormat}`);
         return;
       } catch (e) {
+        this._log(`[TX WARN] Формат ${this.preferredWriteFormat} не сработал, перебираем...`, "warn");
         this.preferredWriteFormat = null;
       }
     }
@@ -634,6 +649,7 @@ class BaseBLEDevice {
           value: val
         });
         this.preferredWriteFormat = fmt;
+        this._log(`[TX OK] Успешно отправлено в формате: ${fmt}`);
         return;
       } catch (err) {
         lastErr = err;
@@ -649,11 +665,12 @@ class BaseBLEDevice {
       throw new Error("Устройство не подключено");
     }
     try {
+      this._log(`[TX CMD] Отправка команды: ${cmd}`);
       // Никаких \n, отправляем строго чистый JSON-объект
       const bytes = new TextEncoder().encode(cmd);
       await this._sendBytes(bytes);
     } catch (e) {
-      this._log(`Ошибка отправки команды: ${e?.message || e}`, "error");
+      this._log(`[TX ERROR] Ошибка отправки команды "${cmd}": ${e?.message || e}`, "error");
       throw e;
     }
   }
