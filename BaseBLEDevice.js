@@ -487,7 +487,7 @@ class BaseBLEDevice {
     }, delayMs);
   }
 
-  // --- ВОССТАНОВЛЕННЫЙ МЕТОД ПАРСИНГА ВХОДЯЩИХ ДАННЫХ ---
+  // --- ПАРСИНГ ВХОДЯЩИХ ДАННЫХ ПО ЗАКРЫВАЮЩЕЙ СКОБКЕ '}' ---
   _parseData(result) {
     this._log(`[RX RAW] -> ${JSON.stringify(result)}`);
 
@@ -545,15 +545,17 @@ class BaseBLEDevice {
         return;
       }
 
+      // Выделяем валидный JSON по закрывающей фигурной скобке '}'
       let idx;
-      while ((idx = this.rxBuffer.indexOf('\n')) !== -1) {
-        const line = this.rxBuffer.substring(0, idx).replace(/\r$/, '').trim();
+      while ((idx = this.rxBuffer.indexOf('}')) !== -1) {
+        const candidate = this.rxBuffer.substring(0, idx + 1).trim();
         this.rxBuffer = this.rxBuffer.substring(idx + 1);
-        if (!line) continue;
+
+        if (!candidate || !candidate.startsWith('{')) continue;
 
         try {
-          const data = JSON.parse(line);
-          this._log(`[RX JSON] -> ${line}`);
+          const data = JSON.parse(candidate);
+          this._log(`[RX JSON] -> ${candidate}`);
 
           if (data.sys) {
             this.espFwVersion = typeof data.sys === 'object' ? data.sys.fw : data.sys;
@@ -562,7 +564,7 @@ class BaseBLEDevice {
 
           this.onTelemetry(data);
         } catch (e) {
-          this._log(`Ошибка парсинга JSON: ${line}`, "warn");
+          this._log(`Ошибка парсинга JSON: ${candidate}`, "warn");
         }
       }
     } catch (e) {
@@ -641,13 +643,14 @@ class BaseBLEDevice {
     throw lastErr || new Error("Все форматы записи отклонены плагином");
   }
   
+  // --- ОТПРАВКА КОМАНД БЕЗ ДОБАВЛЕНИЯ \n ---
   async sendCmd(cmd) {
     if (!this.connectedDeviceId || !this.BluetoothLe) {
       throw new Error("Устройство не подключено");
     }
     try {
-      const formattedCmd = cmd.endsWith('\n') ? cmd : cmd + '\n';
-      const bytes = new TextEncoder().encode(formattedCmd);
+      // Никаких \n, отправляем строго чистый JSON-объект
+      const bytes = new TextEncoder().encode(cmd);
       await this._sendBytes(bytes);
     } catch (e) {
       this._log(`Ошибка отправки команды: ${e?.message || e}`, "error");
@@ -702,6 +705,7 @@ class BaseBLEDevice {
       }
 
       await this._delay(200);
+      // Команда окончания OTA также отправляется без \n
       await this.sendCmd(JSON.stringify({ cmd: "OTA_END" }));
       
       alert("Прошивка успешно завершена! ESP32 перезагружается.");
