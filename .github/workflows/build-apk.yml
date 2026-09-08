@@ -88,68 +88,29 @@ jobs:
             rm -rf android/app/src/main/res/mipmap-*/ic_launcher*.xml 2>/dev/null || true
           fi
 
-      - name: Configure Release Signing & Auto-Versioning
+      - name: Configure Auto-Versioning
         run: |
-          mkdir -p android/app
-          if [ -f ~/.android/debug.keystore ]; then
-            cp ~/.android/debug.keystore android/app/debug.keystore
-          fi
-          
-          # Автоматический инкремент versionCode и versionName
           sed -i -E "s/versionCode([ =]+)[0-9]+/versionCode\1${GITHUB_RUN_NUMBER}/g" android/app/build.gradle 2>/dev/null || true
           sed -i -E "s/versionName([ =]+)\"[^\"]+\"/versionName\1\"1.0.${GITHUB_RUN_NUMBER}\"/g" android/app/build.gradle 2>/dev/null || true
 
-          python3 - << 'EOF'
-          import os, re
-          path = "android/app/build.gradle"
-          if os.path.exists(path):
-              with open(path, "r", encoding="utf-8") as f:
-                  content = f.read()
-
-              config = """
-                  signingConfigs {
-                      release {
-                          storeFile file("debug.keystore")
-                          storePassword "android"
-                          keyAlias "androiddebugkey"
-                          keyPassword "android"
-                          v2SigningEnabled true
-                      }
-                  }"""
-
-              if "signingConfigs {" not in content:
-                  content = content.replace("android {", "android {\n" + config)
-
-              if "signingConfig signingConfigs.release" not in content:
-                  content = re.sub(
-                      r'buildTypes\s*\{',
-                      'buildTypes {\n        release {\n            signingConfig signingConfigs.release\n        }',
-                      content,
-                      count=1
-                  )
-
-              with open(path, "w", encoding="utf-8") as f:
-                  f.write(content)
-          EOF
-
-      - name: Build Release APK with Gradle
+      - name: Build Debug APK with Gradle
         run: |
           cd android
           chmod +x gradlew
-          ./gradlew assembleRelease
+          ./gradlew assembleDebug
 
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
         with:
           name: je-ble-app
-          path: android/app/build/outputs/apk/release/app-release.apk
+          path: android/app/build/outputs/apk/debug/app-debug.apk
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          files: android/app/build/outputs/apk/release/app-release.apk
+          files: android/app/build/outputs/apk/debug/app-debug.apk
           tag_name: latest
-          name: "Автоматическая сборка"
+          name: "Отладочная сборка (Debug)"
           allowUpdates: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
