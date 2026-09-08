@@ -390,7 +390,6 @@ class BaseBLEDevice {
           characteristic: this.txUuid
         }, notifHandler);
       } catch (notifErr) {
-        // Fallback для версий плагина с раздельным addListener
         await this.BluetoothLe.startNotifications({
           deviceId,
           service: this.serviceUuid,
@@ -483,8 +482,11 @@ class BaseBLEDevice {
     }, delayMs);
   }
 
-  // --- НАДЕЖНЫЙ ПАРСЕР ВХОДЯЩИХ ДАННЫХ (БЕЗ УПАДЕНИЙ) ---
+  // --- НАДЕЖНЫЙ ПАРСЕР ВХОДЯЩИХ ДАННЫХ ---
   _parseData(result) {
+    // Входной лог сырого пакета
+    this._log(`[RX RAW] -> ${JSON.stringify(result)}`);
+
     if (this.isOtaInProgress || !result) return;
 
     try {
@@ -501,7 +503,6 @@ class BaseBLEDevice {
         bytes = new Uint8Array(rawVal.buffer, rawVal.byteOffset || 0, rawVal.byteLength || rawVal.buffer.byteLength);
       } else if (typeof rawVal === 'string') {
         const cleanStr = rawVal.trim();
-        // ДЕКОДИРОВАНИЕ HEX-СТРОК
         if (/^[0-9a-fA-F]+$/.test(cleanStr) && cleanStr.length % 2 === 0) {
           bytes = new Uint8Array(cleanStr.match(/.{1,2}/g).map(b => parseInt(b, 16)));
         } else {
@@ -539,6 +540,7 @@ class BaseBLEDevice {
 
         try {
           const data = JSON.parse(line);
+          this._log(`[RX JSON] -> ${line}`);
 
           if (data.sys) {
             this.espFwVersion = typeof data.sys === 'object' ? data.sys.fw : data.sys;
@@ -555,7 +557,7 @@ class BaseBLEDevice {
     }
   }
 
-  // --- БЕЗОПАСНАЯ ЗАПИСЬ В ХАРАКТЕРИСТИКУ (WRITE WITHOUT RESPONSE FIRST) ---
+  // --- БЕЗОПАСНАЯ ЗАПИСЬ В ХАРАКТЕРИСТИКУ ---
   async _writeRaw(options) {
     if (typeof this.BluetoothLe.writeWithoutResponse === 'function') {
       try {
@@ -582,9 +584,9 @@ class BaseBLEDevice {
     };
 
     const getVariant = (type) => {
+      if (type === 'base64') return uint8ToBase64(uint8Bytes);
       if (type === 'dataview') return new DataView(uint8Bytes.buffer, uint8Bytes.byteOffset, uint8Bytes.byteLength);
       if (type === 'hex') return uint8ToHex(uint8Bytes);
-      if (type === 'base64') return uint8ToBase64(uint8Bytes);
       if (type === 'array') return Array.from(uint8Bytes);
       return null;
     };
@@ -603,8 +605,8 @@ class BaseBLEDevice {
       }
     }
 
-    // Безопасный перебор всех форматов
-    const formats = ['dataview', 'hex', 'base64', 'array'];
+    // Приоритет отдан base64
+    const formats = ['base64', 'dataview', 'hex', 'array'];
     let lastErr = null;
 
     for (const fmt of formats) {
