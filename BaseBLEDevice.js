@@ -60,7 +60,7 @@ class BaseBLEDevice {
     try {
       const logs = JSON.parse(localStorage.getItem("ble_debug_logs") || "[]");
       logs.push(formatted);
-      if (logs.length > 100) logs.shift(); // Храним последние 100 записей
+      if (logs.length > 100) logs.shift();
       localStorage.setItem("ble_debug_logs", JSON.stringify(logs));
     } catch (e) {}
   }
@@ -78,7 +78,6 @@ class BaseBLEDevice {
     this._log("[JE Core] Журнал логов очищен.");
   }
 
-  // Управление существующим в index.html элементом #crash-guard-modal
   showLogsModal() {
     const modal = document.getElementById("crash-guard-modal");
     if (!modal) {
@@ -149,7 +148,6 @@ class BaseBLEDevice {
     this._log("[Crash Guard] Блокировка сбоя сброшена вручную.");
   }
 
-  // --- ИНИЦИАЛИЗАЦИЯ ---
   async init() {
     this._log("[JE Core] Запуск процесса инициализации BLE...");
 
@@ -311,7 +309,6 @@ class BaseBLEDevice {
     }
   }
 
-  // --- ПОДОГНАННЫЙ ПОД СТАБИЛЬНОСТЬ ПОШАГОВЫЙ ПАЙПЛАЙН ---
   async connectNativeBLE(deviceId) {
     if (this.isConnecting || !deviceId) return;
 
@@ -329,14 +326,12 @@ class BaseBLEDevice {
       this.streamDecoder = new TextDecoder('utf-8', { fatal: false });
       this.currentMtu = 23;
 
-      // 1. GATT CONNECT
       this._setCurrentStep("GATT_CONNECTING");
       await this.BluetoothLe.connect({ deviceId, timeout: 10000 });
 
       this._setCurrentStep("GATT_STABILIZING");
-      await this._delay(800); // Guard Interval для очистки нативного Event Loop
+      await this._delay(800);
 
-      // 2. DISCOVER SERVICES
       this._setCurrentStep("DISCOVER_SERVICES");
       this._log("[BLE] Опрос GATT-сервисов...");
       
@@ -349,7 +344,6 @@ class BaseBLEDevice {
 
       await this._delay(500);
 
-      // 3. REQUEST MTU (Согласование максимального размера пакета)
       this._setCurrentStep("REQUEST_MTU");
       if (typeof this.BluetoothLe.requestMtu === 'function') {
         try {
@@ -364,7 +358,6 @@ class BaseBLEDevice {
         await this._delay(400);
       }
 
-      // 4. REGISTER LISTENERS & START NOTIFICATIONS (С ОБЯЗАТЕЛЬНОЙ ОЧИСТКОЙ СТАРОГО)
       this._setCurrentStep("START_NOTIFICATIONS_EXEC");
 
       if (this.valueListener) {
@@ -403,15 +396,13 @@ class BaseBLEDevice {
         });
       }
 
-      await this._delay(800); // Guard Interval после подписки
+      await this._delay(800);
 
-      // 5. УСПЕШНОЕ ПОДКЛЮЧЕНИЕ
       this._setCurrentStep("CONNECTED_WAITING_STABILITY");
       this.updateUI("connected");
 
       await this._delay(500);
 
-      // 6. ИЗОЛИРОВАННАЯ ОТПРАВКА СТАРТОВОЙ КОМАНДЫ
       await this._safeSendHandshake();
 
       this._setCurrentStep("OPERATIONAL_PENDING_GUARD");
@@ -496,7 +487,7 @@ class BaseBLEDevice {
     }, delayMs);
   }
 
-  // --- НАДЕЖНЫЙ ПАРСЕР ВХОДЯЩИХ ДАННЫХ ---
+  // --- ВОССТАНОВЛЕННЫЙ МЕТОД ПАРСИНГА ВХОДЯЩИХ ДАННЫХ ---
   _parseData(result) {
     this._log(`[RX RAW] -> ${JSON.stringify(result)}`);
 
@@ -556,7 +547,7 @@ class BaseBLEDevice {
 
       let idx;
       while ((idx = this.rxBuffer.indexOf('\n')) !== -1) {
-        const line = this.rxBuffer.substring(0, idx).trim();
+        const line = this.rxBuffer.substring(0, idx).replace(/\r$/, '').trim();
         this.rxBuffer = this.rxBuffer.substring(idx + 1);
         if (!line) continue;
 
@@ -579,7 +570,6 @@ class BaseBLEDevice {
     }
   }
 
-  // --- БЕЗОПАСНАЯ ЗАПИСЬ В ХАРАКТЕРИСТИКУ ---
   async _writeRaw(options) {
     if (typeof this.BluetoothLe.writeWithoutResponse === 'function') {
       try {
