@@ -155,18 +155,22 @@ class AppUpdater {
         btnUpdateApp.innerText = "Установка...";
       }
 
-      this._log("Запуск установки через нативный плагин FileOpener...");
-      
+      this._log("Проверка доступности плагина FileOpener перед вызовом...");
+      this._log(`Объект FileOpener: ${JSON.stringify(this.FileOpener)}`);
+
       if (!this.FileOpener || typeof this.FileOpener.open !== 'function') {
-        throw new Error("Плагин FileOpener не установлен или недоступен в Capacitor. Выполните npm i @capacitor-community/file-opener и npx cap sync");
+        throw new Error("Плагин FileOpener не установлен или недоступен в Capacitor.");
       }
 
-      await this.FileOpener.open({
+      this._log(`Вызов FileOpener.open с filePath: ${savedFile.uri}`);
+      
+      const openResult = await this.FileOpener.open({
         filePath: savedFile.uri,
-        contentType: 'application/vnd.android.package-archive'
+        contentType: 'application/vnd.android.package-archive',
+        openWithDefault: true
       });
       
-      this._log("Команда на открытие APK успешно передана в систему Android.");
+      this._log(`FileOpener.open успешно выполнился. Результат: ${JSON.stringify(openResult)}`);
 
     } catch (e) {
       this._log(`КРИТИЧЕСКАЯ ОШИБКА при внутриаппаратном обновлении: ${e?.message || e}`, "error");
