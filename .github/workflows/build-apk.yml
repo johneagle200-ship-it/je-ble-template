@@ -74,11 +74,9 @@ jobs:
           }
               """
 
-              # 1. Вставляем блок signingConfigs сразу после 'android {'
               if "signingConfigs {" not in content:
                   content = content.replace("android {", "android {\n" + signing_code, 1)
 
-              # 2. Безопасно добавляем подпись в buildTypes
               if "buildTypes {" in content and "signingConfig signingConfigs.debug" not in content:
                   content = content.replace("buildTypes {", "buildTypes {\n        debug {\n            signingConfig signingConfigs.debug\n        }", 1)
 
@@ -86,7 +84,7 @@ jobs:
                   f.write(content)
           EOF
 
-      - name: Patch AndroidManifest.xml for BLE Permissions
+      - name: Patch AndroidManifest.xml for Permissions
         run: |
           python3 - << 'EOF'
           import os
@@ -106,11 +104,12 @@ jobs:
                   <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
                   <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
                   <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
+                  <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
                   <uses-feature android:name="android.hardware.bluetooth_le" android:required="true" />
               """
 
               lines = content.splitlines()
-              filtered = [l for l in lines if not any(p in l for p in ["BLUETOOTH", "ACCESS_FINE_LOCATION", "ACCESS_COARSE_LOCATION", "bluetooth_le"])]
+              filtered = [l for l in lines if not any(p in l for p in ["BLUETOOTH", "ACCESS_FINE_LOCATION", "ACCESS_COARSE_LOCATION", "bluetooth_le", "REQUEST_INSTALL_PACKAGES"])]
               content = "\n".join(filtered)
 
               content = content.replace("<application", perms + "\n    <application", 1)
