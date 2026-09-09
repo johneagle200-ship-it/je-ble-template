@@ -140,7 +140,8 @@ class AppUpdater {
       
       this._log(`APK успешно скачан. Размер данных (base64): ~${Math.round(response.data.length / 1024)} КБ`);
 
-      const fileName = `update_${Date.now()}.apk`;
+      // Сохраняем в кэш под оригинальным именем
+      const fileName = "app-debug.apk";
       this._log(`Сохранение файла в системный внешний кэш под именем: ${fileName}`);
 
       const savedFile = await this.Filesystem.writeFile({
