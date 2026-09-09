@@ -1,6 +1,11 @@
 class BaseApp {
-  constructor(config) {
-    this.updater = new AppUpdater(config);
+  constructor(config = {}) {
+    // Безопасное извлечение параметров из объекта или аргументов
+    const repoOwner = typeof config === 'string' ? config : config?.repoOwner;
+    const repoName = config?.repoName;
+
+    // Инициализация сервисов
+    this.updater = new AppUpdater(repoOwner, repoName);
     this.ble = new BaseBLEDevice(config);
 
     // Связываем передачу телеметрии в MainApp
@@ -8,10 +13,10 @@ class BaseApp {
       this.ble.onTelemetry = (data) => this.onTelemetry(data);
     }
 
-    // Глобальный перехватчик JS-ошибок (выведет текст на экран вместо вылета)
+    // Глобальный перехватчик JS-ошибок
     window.onerror = (msg, url, line, col, error) => {
       alert(`🚨 Ошибка JS:\n${msg}\nСтрока: ${line}:${col}`);
-      return true; // Предотвращает падение приложения
+      return true;
     };
 
     window.addEventListener('unhandledrejection', (event) => {
@@ -20,15 +25,33 @@ class BaseApp {
   }
 
   async init() {
-    await this.updater.init();
-    if (this.ble && typeof this.ble.init === 'function') {
-      await this.ble.init();
+    console.log("[JE Core] Инициализация BaseApp...");
+
+    // 1. Модуль автообновлений (в изоляции)
+    try {
+      if (this.updater) {
+        if (typeof this.updater.init === 'function') {
+          await this.updater.init();
+        } else if (typeof this.updater.checkForUpdates === 'function') {
+          await this.updater.checkForUpdates();
+        }
+      }
+    } catch (err) {
+      console.error("[AppUpdater] Сбой автопроверки обновлений:", err);
+    }
+
+    // 2. Модуль BLE (в изоляции)
+    try {
+      if (this.ble && typeof this.ble.init === 'function') {
+        await this.ble.init();
+      }
+    } catch (err) {
+      console.error("[JE Core] Сбой инициализации BLE:", err);
     }
   }
 
   onTelemetry(data) {} // Переопределяется в app.js
 
-  // Безопасный вызов подключения с отловом исключений
   async connectOrReconnect() {
     try {
       await this.ble.connectOrReconnect();
