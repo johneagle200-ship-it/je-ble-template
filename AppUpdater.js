@@ -5,10 +5,9 @@ class AppUpdater {
     this.currentVersion = null;
     this.Filesystem = window.Capacitor?.Plugins?.Filesystem;
     this.CapacitorHttp = window.Capacitor?.Plugins?.CapacitorHttp;
-    this.FileOpener = window.Capacitor?.Plugins?.FileOpener;
+    this.FileOpener = window.Capacitor?.Plugins?.FileOpener || window.FileOpener;
   }
 
-  // Внутренний метод логирования, синхронизированный со стилем проекта
   _log(msg, level = "info") {
     const timestamp = new Date().toLocaleTimeString();
     const formatted = `[${timestamp}] [AppUpdater] [${level.toUpperCase()}] ${msg}`;
@@ -117,8 +116,8 @@ class AppUpdater {
     this._log(`Старт процесса обновления. Целевой URL APK: ${apkUrl}`);
     
     if (!this.Filesystem || !this.CapacitorHttp) {
-      this._log("Нативные плагины Filesystem или CapacitorHttp недоступны в текущем окружении. Откат на window.open.", "warn");
-      window.open(apkUrl, '_system');
+      this._log("Нативные плагины Filesystem или CapacitorHttp недоступны в текущем окружении.", "error");
+      alert("Ошибка: нативные плагины не инициализированы.");
       return;
     }
 
@@ -142,7 +141,7 @@ class AppUpdater {
       this._log(`APK успешно скачан. Размер данных (base64): ~${Math.round(response.data.length / 1024)} КБ`);
 
       const fileName = `update_${Date.now()}.apk`;
-      this._log(`Сохранение файла в системный кэш под именем: ${fileName}`);
+      this._log(`Сохранение файла в системный внешний кэш под именем: ${fileName}`);
 
       const savedFile = await this.Filesystem.writeFile({
         path: fileName,
@@ -156,24 +155,18 @@ class AppUpdater {
         btnUpdateApp.innerText = "Установка...";
       }
 
-      this._log("Попытка запуска установки через плагин FileOpener...");
-      if (this.FileOpener && typeof this.FileOpener.open === 'function') {
-        await this.FileOpener.open({
-          filePath: savedFile.uri,
-          contentType: 'application/vnd.android.package-archive'
-        });
-        this._log("Команда на открытие APK для установки успешно передана в FileOpener.");
-      } else {
-        this._log("Плагин FileOpener недоступен, пробуем запасной вариант через Browser / Intent...", "warn");
-        const Browser = window.Capacitor?.Plugins?.Browser;
-        if (Browser && typeof Browser.open === 'function') {
-          await Browser.open({ url: savedFile.uri });
-          this._log("Запуск через Capacitor Browser выполнен.");
-        } else {
-          window.open(savedFile.uri, '_system');
-          this._log("Запуск через window.open выполнен.");
-        }
+      this._log("Запуск установки через нативный плагин FileOpener...");
+      
+      if (!this.FileOpener || typeof this.FileOpener.open !== 'function') {
+        throw new Error("Плагин FileOpener не установлен или недоступен в Capacitor. Выполните npm i @capacitor-community/file-opener и npx cap sync");
       }
+
+      await this.FileOpener.open({
+        filePath: savedFile.uri,
+        contentType: 'application/vnd.android.package-archive'
+      });
+      
+      this._log("Команда на открытие APK успешно передана в систему Android.");
 
     } catch (e) {
       this._log(`КРИТИЧЕСКАЯ ОШИБКА при внутриаппаратном обновлении: ${e?.message || e}`, "error");
