@@ -52,6 +52,37 @@ jobs:
             cp debug.keystore android/app/debug.keystore 2>/dev/null || true
           fi
 
+      - name: Patch build.gradle for Fixed Debug Keystore
+        run: |
+          python3 - << 'EOF'
+          import os
+
+          path = "android/app/build.gradle"
+          if os.path.exists(path):
+              with open(path, "r", encoding="utf-8") as f:
+                  content = f.read()
+
+              signing_code = """
+                  signingConfigs {
+                      debug {
+                          storeFile file('debug.keystore')
+                          storePassword 'android'
+                          keyAlias 'androiddebugkey'
+                          keyPassword 'android'
+                      }
+                  }
+              """
+
+              if "signingConfigs {" not in content:
+                  content = content.replace("android {", "android {\n" + signing_code, 1)
+
+              if "buildTypes {" in content and "signingConfig signingConfigs.debug" not in content:
+                  content = content.replace("debug {", "debug {\n            signingConfig signingConfigs.debug", 1)
+
+              with open(path, "w", encoding="utf-8") as f:
+                  f.write(content)
+          EOF
+
       - name: Patch AndroidManifest.xml for BLE Permissions
         run: |
           python3 - << 'EOF'
