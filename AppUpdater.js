@@ -8,10 +8,20 @@ class AppUpdater {
     this.FileOpener = window.Capacitor?.Plugins?.FileOpener;
   }
 
+  // Внутренний метод логирования, синхронизированный со стилем проекта
+  _log(msg, level = "info") {
+    const timestamp = new Date().toLocaleTimeString();
+    const formatted = `[${timestamp}] [AppUpdater] [${level.toUpperCase()}] ${msg}`;
+    console.log(formatted);
+  }
+
   async init() {
+    this._log("Инициализация модуля обновления...");
     await this.loadAppVersion();
     if (this.currentVersion) {
       setTimeout(() => this.checkForUpdates(), 2000);
+    } else {
+      this._log("Не удалось определить текущую версию, проверка обновлений пропущена.", "warn");
     }
   }
 
@@ -22,38 +32,55 @@ class AppUpdater {
 
     if (headerEl) headerEl.innerText = verStr;
     if (menuEl) menuEl.innerText = verStr;
+    this._log(`Интерфейс обновлен до версии ${verStr}`);
   }
 
   async loadAppVersion() {
     try {
+      this._log("Чтение локального package.json...");
       const res = await fetch('./package.json');
       if (!res.ok) throw new Error(`HTTP Error ${res.status}`);
       const pkg = await res.json();
       if (pkg.version) {
         this.currentVersion = pkg.version;
+        this._log(`Локальная версия определена: ${this.currentVersion}`);
         this.applyVersionUI(this.currentVersion);
+      } else {
+        this._log("В локальном package.json отсутствует поле version", "warn");
       }
     } catch (e) {
-      console.warn('[AppUpdater] Ошибка чтения локального package.json:', e?.message || e);
+      this._log(`Ошибка чтения локального package.json: ${e?.message || e}`, "error");
     }
   }
 
   async checkForUpdates() {
-    if (!this.repoOwner || !this.repoName || !this.currentVersion) return;
+    if (!this.repoOwner || !this.repoName || !this.currentVersion) {
+      this._log("Пропуск проверки: не задан репозиторий или текущая версия", "warn");
+      return;
+    }
 
     try {
       const url = `https://raw.githubusercontent.com/${this.repoOwner}/${this.repoName}/main/package.json?t=${Date.now()}`;
+      this._log(`Запрос удаленной версии с GitHub: ${url}`);
+      
       const res = await fetch(url);
-      if (!res.ok) return;
+      if (!res.ok) {
+        this._log(`Не удалось получить удаленный package.json, статус: ${res.status}`, "warn");
+        return;
+      }
 
       const remotePkg = await res.json();
       const remoteVer = remotePkg.version;
+      this._log(`Удаленная версия на ветке main: ${remoteVer} (текущая: ${this.currentVersion})`);
 
       if (remoteVer && this.isNewerVersion(remoteVer, this.currentVersion)) {
+        this._log(`Доступна новая версия ${remoteVer}! Активация UI обновления.`);
         this.showUpdateUI(remoteVer);
+      } else {
+        this._log("Установлена актуальная версия приложения.");
       }
     } catch (err) {
-      console.warn('[AppUpdater] Ошибка/таймаут проверки обновлений:', err?.message || err);
+      this._log(`Ошибка/таймаут проверки обновлений: ${err?.message || err}`, "error");
     }
   }
 
@@ -87,9 +114,10 @@ class AppUpdater {
 
   async updateApp() {
     const apkUrl = `https://github.com/${this.repoOwner}/${this.repoName}/releases/download/latest/app-debug.apk`;
+    this._log(`Старт процесса обновления. Целевой URL APK: ${apkUrl}`);
     
     if (!this.Filesystem || !this.CapacitorHttp) {
-      console.warn("[AppUpdater] Нативные плагины Filesystem или CapacitorHttp недоступны. Откат на браузер.");
+      this._log("Нативные плагины Filesystem или CapacitorHttp недоступны в текущем окружении. Откат на window.open.", "warn");
       window.open(apkUrl, '_system');
       return;
     }
@@ -101,52 +129,55 @@ class AppUpdater {
         btnUpdateApp.disabled = true;
       }
 
-      console.log("[AppUpdater] Скачивание APK через CapacitorHttp...");
-      
-      // Скачиваем файл в формате base64, чтобы обойти проблемы с бинарными стримами в WebView
+      this._log("Отправка HTTP-запроса на скачивание APK (в формате base64)...");
       const response = await this.CapacitorHttp.get({
         url: apkUrl,
         responseType: 'base64'
       });
 
       if (!response || !response.data) {
-        throw new Error("Не удалось получить данные APK с сервера");
+        throw new Error("Не удалось получить данные APK с сервера (пустой ответ)");
       }
+      
+      this._log(`APK успешно скачан. Размер данных (base64): ~${Math.round(response.data.length / 1024)} КБ`);
 
-      console.log("[AppUpdater] Сохранение APK во внешнее хранилище кэша...");
       const fileName = `update_${Date.now()}.apk`;
+      this._log(`Сохранение файла в системный кэш под именем: ${fileName}`);
 
-      // Сохраняем в системную директорию кэша (DIRECTORY_CACHE или EXTERNAL_CACHE)
       const savedFile = await this.Filesystem.writeFile({
         path: fileName,
         data: response.data,
         directory: 'CACHE'
       });
 
-      console.log("[AppUpdater] Файл сохранен:", savedFile.uri);
+      this._log(`Файл успешно сохранен на устройстве. URI: ${savedFile.uri}`);
 
       if (btnUpdateApp) {
         btnUpdateApp.innerText = "Установка...";
       }
 
-      // Открываем скачанный файл для установки силами Android
+      this._log("Попытка запуска установки через плагин FileOpener...");
       if (this.FileOpener && typeof this.FileOpener.open === 'function') {
         await this.FileOpener.open({
           filePath: savedFile.uri,
           contentType: 'application/vnd.android.package-archive'
         });
+        this._log("Команда на открытие APK для установки успешно передана в FileOpener.");
       } else {
-        // Запасной вариант через системный Intent браузера/файлового менеджера для локального файла
+        this._log("Плагин FileOpener недоступен, пробуем запасной вариант через Browser / Intent...", "warn");
         const Browser = window.Capacitor?.Plugins?.Browser;
         if (Browser && typeof Browser.open === 'function') {
           await Browser.open({ url: savedFile.uri });
+          this._log("Запуск через Capacitor Browser выполнен.");
         } else {
           window.open(savedFile.uri, '_system');
+          this._log("Запуск через window.open выполнен.");
         }
       }
 
     } catch (e) {
-      console.error("[AppUpdater] Ошибка при внутриаппаратном обновлении:", e);
+      this._log(`КРИТИЧЕСКАЯ ОШИБКА при внутриаппаратном обновлении: ${e?.message || e}`, "error");
+      console.error(e);
       alert("Не удалось обновить приложение автоматически: " + (e?.message || e));
       
       const btnUpdateApp = document.getElementById('btnUpdateApp');
