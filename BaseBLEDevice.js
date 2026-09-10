@@ -21,6 +21,9 @@ class BaseBLEDevice {
     // --- ЗАЩИТА ОТ ГОНОК СОСТОЯНИЙ (Session Guard) ---
     this.connectionSessionId = 0;
 
+    // --- ОЧЕРЕДЬ ЗАПИСИ (Write Mutex) ДЛЯ ПРЕДОТВРАЩЕНИЯ КОНФЛИКТОВ СТЕКА BLE ---
+    this._writeQueue = Promise.resolve();
+
     // --- CRASH GUARD (Энергонезависимая защита) ---
     this.minStableSessionMs = config.minStableSessionMs || 5000;
     this.stableTimer = null;
@@ -208,7 +211,7 @@ class BaseBLEDevice {
         try {
           this.disconnectListener = await this.BluetoothLe.addListener('disconnected', (info) => {
             this._log(`[Событие] Потеря связи на шаге [${this.currentStep}]: ${JSON.stringify(info)}`, "warn");
-            this.connectionSessionId++; // Инвалидируем текущую сессию подключения
+            this.connectionSessionId++; 
             this.isConnecting = false;
             clearTimeout(this.stableTimer);
 
@@ -401,7 +404,7 @@ class BaseBLEDevice {
       if (currentSession !== this.connectionSessionId) return;
 
       this._setCurrentStep("GATT_STABILIZING");
-      await this._delay(1000); // Увеличенная пауза для стабилизации стека
+      await this.emulatorDelay ? await this._delay(500) : await this._delay(1000);
 
       if (currentSession !== this.connectionSessionId) return;
 
@@ -476,7 +479,6 @@ class BaseBLEDevice {
       }
 
       if (currentSession !== this.connectionSessionId) return;
-      // Даем стеку полностью успокоиться после включения нотификаций
       await this._delay(1200);
 
       this._setCurrentStep("CONNECTED_WAITING_STABILITY");
@@ -530,7 +532,7 @@ class BaseBLEDevice {
   }
 
   async disconnectBLE() {
-    this.connectionSessionId++; // Инвалидируем сессию
+    this.connectionSessionId++; 
     this.isExplicitDisconnect = true;
     clearTimeout(this.reconnectTimer);
     clearTimeout(this.stableTimer);
@@ -628,7 +630,6 @@ class BaseBLEDevice {
 
       this.rxBuffer += chunk;
 
-      // Защита от переполнения буфера с сохранением хвоста (последней незакрытой конструкции)
       if (this.rxBuffer.length > this.maxBufferSize) {
         this._log("[RX ERROR] Буфер переполнен, очистка с сохранением хвоста...", "warn");
         const lastOpen = this.rxBuffer.lastIndexOf('{');
@@ -642,11 +643,9 @@ class BaseBLEDevice {
 
       let parsedCount = 0;
 
-      // Итеративный поиск полноценных JSON-объектов методом подсчета фигурных скобок с учетом строковых литералов
       while (true) {
         const openIdx = this.rxBuffer.indexOf('{');
         if (openIdx === -1) {
-          // Если открывающих скобок нет, сбрасываем мусор, если он слишком длинный
           if (this.rxBuffer.length > 2048) this.rxBuffer = "";
           break;
         }
@@ -688,7 +687,6 @@ class BaseBLEDevice {
         }
 
         if (closeIdx === -1) {
-          // Полный JSON еще не пришел целиком, ждем следующие пакеты
           break;
         }
 
@@ -744,7 +742,6 @@ class BaseBLEDevice {
 
     const base64Value = uint8ToBase64(uint8Bytes);
 
-    // Для надежности при инициализации и коротких команд сначала пробуем write (с ответом)
     try {
       await this.BluetoothLe.write({
         deviceId,
@@ -770,31 +767,38 @@ class BaseBLEDevice {
     throw new Error("Методы записи недоступны в плагине BluetoothLe");
   }
   
-async _sendBytes(uint8Bytes, timeoutMs = 3000) {
+  // --- ЗАЩИЩЕННАЯ ОЧЕРЕДЬ ОТПРАВКИ (Write Mutex) ---
+  async _sendBytes(uint8Bytes, timeoutMs = 3000) {
     if (!this.connectedDeviceId || !this.BluetoothLe) {
       throw new Error("Устройство не подключено");
     }
 
-    const writePromise = this._writeRaw(
-      this.connectedDeviceId,
-      this.serviceUuid,
-      this.rxUuid,
-      uint8Bytes
-    );
+    this._writeQueue = this._writeQueue.then(async () => {
+      const writePromise = this._writeRaw(
+        this.connectedDeviceId,
+        this.serviceUuid,
+        this.rxUuid,
+        uint8Bytes
+      );
 
-    let timeoutId;
-    const timeoutPromise = new Promise((_, reject) => {
-      timeoutId = setTimeout(() => reject(new Error("Таймаут отправки чанка по BLE")), timeoutMs);
+      let timeoutId;
+      const timeoutPromise = new Promise((_, reject) => {
+        timeoutId = setTimeout(() => reject(new Error("Таймаут отправки чанка по BLE")), timeoutMs);
+      });
+
+      try {
+        await Promise.race([writePromise, timeoutPromise]);
+      } finally {
+        clearTimeout(timeoutId);
+      }
+    }).catch(err => {
+      throw err;
     });
 
-    try {
-      await Promise.race([writePromise, timeoutPromise]);
-    } finally {
-      clearTimeout(timeoutId);
-    }
+    return this._writeQueue;
   }
   
-  // --- ОТПРАВКА КОМАНД БЕЗ ДОБАВЛЕНИЯ \n ---
+  // --- ОТПРАВКА КОМАНД ---
   async sendCmd(cmd) {
     if (!this.connectedDeviceId || !this.BluetoothLe) {
       throw new Error("Устройство не подключено");
@@ -860,8 +864,7 @@ async _sendBytes(uint8Bytes, timeoutMs = 3000) {
           if (typeof this.onOtaProgressCallback === 'function') {
             this.onOtaProgressCallback(percent);
           }
-          const statusEl = document.getElementById('bleStatus');
-          if (statusEl) statusEl.innerText = `Прошивка ESP32: ${percent}%`;
+          this._setElementText('bleStatus', `Прошивка ESP32: ${percent}%`);
         }
       }
 
