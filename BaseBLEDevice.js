@@ -698,8 +698,12 @@ class BaseBLEDevice {
           parsedCount++;
           this._log(`[RX JSON #${parsedCount}] Успешно распарсено`);
 
-          if (data.counter !== undefined || data.cnt !== undefined) {
-            this._log(`[COUNTER] Получено значение счётчика: ${data.counter ?? data.cnt}`, "info");
+          const currentCounter = data.counter !== undefined ? data.counter : data.cnt;
+          if (currentCounter !== undefined) {
+            this._log(`[COUNTER] Получено значение счётчика: ${currentCounter}`, "info");
+            this._setElementText('telemetryData', currentCounter);
+          } else if (data.val !== undefined) {
+            this._setElementText('telemetryData', data.val);
           }
 
           if (data.version || data.fw || data.sys) {
@@ -727,7 +731,6 @@ class BaseBLEDevice {
   }
 
   async _writeRaw(deviceId, service, characteristic, uint8Bytes) {
-    // Плагин под Android ожидает hex-строку с пробелами между байтами
     const uint8ToHex = (bytes) => Array.from(bytes).map(b => b.toString(16).padStart(2, '0')).join(' ');
     const hexValue = uint8ToHex(uint8Bytes);
   
@@ -735,7 +738,6 @@ class BaseBLEDevice {
     return true;
   }  
   
-  // --- ЗАЩИЩЕННАЯ ОЧЕРЕДЬ ОТПРАВКИ (Write Mutex) ---
   async _sendBytes(uint8Bytes, timeoutMs = 3000) {
     if (!this.connectedDeviceId || !this.BluetoothLe) {
       throw new Error("Устройство не подключено");
@@ -766,7 +768,6 @@ class BaseBLEDevice {
     return this._writeQueue;
   }
   
-  // --- ОТПРАВКА КОМАНД ---
   async sendCmd(cmd) {
     if (!this.connectedDeviceId || !this.BluetoothLe) {
       throw new Error("Устройство не подключено");
