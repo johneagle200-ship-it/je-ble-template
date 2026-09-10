@@ -48,6 +48,30 @@ class BaseBLEDevice {
     return new Promise((resolve) => setTimeout(resolve, ms));
   }
 
+  // --- РАСЧЕТ CRC32 ---
+  _getCrcTable() {
+    if (this._crcTable) return this._crcTable;
+    let table = new Uint32Array(256);
+    for (let i = 0; i < 256; i++) {
+      let c = i;
+      for (let j = 0; j < 8; j++) {
+        c = (c & 1) ? (0xEDB88320 ^ (c >>> 1)) : (c >>> 1);
+      }
+      table[i] = c;
+    }
+    this._crcTable = table;
+    return table;
+  }
+
+  _calculateCRC32(bytes) {
+    let c = ~0;
+    const table = this._getCrcTable();
+    for (let i = 0; i < bytes.length; i++) {
+      c = (c >>> 8) ^ table[(c ^ bytes[i]) & 0xFF];
+    }
+    return ~c >>> 0;
+  }
+
   // --- ДИАГНОСТИКА И ЛОГИРОВАНИЕ ---
   _log(msg, level = "info") {
     const timestamp = new Date().toLocaleTimeString();
@@ -271,10 +295,8 @@ class BaseBLEDevice {
       clearTimeout(this.reconnectTimer);
       clearTimeout(this.stableTimer);
       
-      // Сразу включаем индикацию загрузки (спиннер / песочные часики)
       this.updateUI("switching");
 
-      // Если уже есть активное подключение, разрываем его
       if (this.connectedDeviceId && this.BluetoothLe) {
         this._log("[BLE] Смена устройства: закрытие текущей сессии...");
         
@@ -299,7 +321,7 @@ class BaseBLEDevice {
 
         this.connectedDeviceId = null;
         this.rxBuffer = "";
-        await this._delay(500); // Пауза для освобождения радиомодуля ОС
+        await this._delay(500);
       }
 
       let result = null;
@@ -578,7 +600,6 @@ class BaseBLEDevice {
         return;
       }
 
-      // Выделяем валидный JSON по закрывающей фигурной скобке '}'
       let idx;
       let parsedCount = 0;
       while ((idx = this.rxBuffer.indexOf('}')) !== -1) {
@@ -697,7 +718,6 @@ class BaseBLEDevice {
     }
     try {
       this._log(`[TX CMD] Отправка команды: ${cmd}`);
-      // Никаких \n, отправляем строго чистый JSON-объект
       const bytes = new TextEncoder().encode(cmd);
       await this._sendBytes(bytes);
     } catch (e) {
@@ -753,8 +773,13 @@ class BaseBLEDevice {
       }
 
       await this._delay(200);
-      // Команда окончания OTA также отправляется без \n
-      await this.sendCmd(JSON.stringify({ cmd: "OTA_END" }));
+      
+      // Вычисляем CRC32 файла прошивки для проверки на ESP32
+      const fileCrc = this._calculateCRC32(bytes);
+      this._log(`[OTA] Вычислен CRC32 файла: 0x${fileCrc.toString(16)}`);
+
+      // Команда окончания OTA с передачей CRC32
+      await this.sendCmd(JSON.stringify({ cmd: "OTA_END", crc: fileCrc }));
       
       alert("Прошивка успешно завершена! ESP32 перезагружается.");
       this.isOtaInProgress = false;
@@ -786,7 +811,6 @@ class BaseBLEDevice {
       if (state === "switching") textState = "Поиск устройств...";
       else textState = state === "connecting" ? "Подключение..." : "Поиск...";
       
-      // Добавляем класс с анимацией вращения (спиннер)
       this._setElementClass('bleStatus', 'status pending spinner-active');
       this._setElementStyle('bottomConnectBar', 'display', 'none');
       this._setElementStyle('btnDisconnect', 'display', 'block');
@@ -812,6 +836,7 @@ class BaseBLEDevice {
       this.onStatusChangeCallback(state, textState);
     }
   }
+
   _setElementText(id, text) {
     const el = document.getElementById(id);
     if (el) el.innerText = text;
