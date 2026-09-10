@@ -18,13 +18,9 @@ class BaseBLEDevice {
     this.reconnectTimer = null;
     this.isOtaInProgress = false;
 
-    // --- ЗАЩИТА ОТ ГОНОК СОСТОЯНИЙ (Session Guard) ---
     this.connectionSessionId = 0;
-
-    // --- ОЧЕРЕДЬ ЗАПИСИ (Write Mutex) ДЛЯ ПРЕДОТВРАЩЕНИЯ КОНФЛИКТОВ СТЕКА BLE ---
     this._writeQueue = Promise.resolve();
 
-    // --- CRASH GUARD (Энергонезависимая защита) ---
     this.minStableSessionMs = config.minStableSessionMs || 5000;
     this.stableTimer = null;
     this.currentStep = "IDLE";
@@ -49,12 +45,10 @@ class BaseBLEDevice {
     this._log("[JE Core] Модуль BaseBLEDevice инициализирован.");
   }
 
-  // --- ВСПОМОГАТЕЛЬНАЯ ЗАДЕРЖКА (Guard Interval) ---
   _delay(ms) {
     return new Promise((resolve) => setTimeout(resolve, ms));
   }
 
-  // --- РАСЧЕТ CRC32 ---
   _getCrcTable() {
     if (this._crcTable) return this._crcTable;
     let table = new Uint32Array(256);
@@ -78,7 +72,6 @@ class BaseBLEDevice {
     return ~c >>> 0;
   }
 
-  // --- ДИАГНОСТИКА И ЛОГИРОВАНИЕ ---
   _log(msg, level = "info") {
     const timestamp = new Date().toLocaleTimeString();
     const formatted = `[${timestamp}] [${level.toUpperCase()}] ${msg}`;
@@ -110,10 +103,7 @@ class BaseBLEDevice {
 
   showLogsModal() {
     const modal = document.getElementById("crash-guard-modal");
-    if (!modal) {
-      this._log("Элемент #crash-guard-modal не найден в DOM", "warn");
-      return;
-    }
+    if (!modal) return;
 
     const lastStep = localStorage.getItem("ble_last_step") || "НЕИЗВЕСТНО";
     const logsText = this.getDebugLogs().join("\n");
@@ -182,61 +172,40 @@ class BaseBLEDevice {
     this._log("[JE Core] Запуск процесса инициализации BLE...");
 
     const crashPending = localStorage.getItem("ble_crash_pending");
-    const lastStep = localStorage.getItem("ble_last_step") || "UNKNOWN";
-
     if (crashPending === "1") {
       this.autoConnectBlocked = true;
-      this._log(`[CRITICAL] Обнаружен нативный сбой при прошлом запуске!`, "error");
-      this._log(`[CRITICAL] Сбой произошел на шаге: [${lastStep}]`, "error");
-      this._log("[Crash Guard] Автоподключение ЗАБЛОКИРОВАНО.", "warn");
-
       setTimeout(() => this.showLogsModal(), 300);
     }
 
-    if (!this.BluetoothLe) {
-      this._log("[JE Core] Плагин Capacitor BluetoothLe не обнаружен!", "warn");
-      return;
-    }
+    if (!this.BluetoothLe) return;
 
     try {
-      try {
-        await this.BluetoothLe.initialize();
-      } catch (initErr) {
-        this._log(`[JE Core] Предупреждение инициализации BLE: ${initErr?.message || initErr}`, "warn");
-      }
-
+      try { await this.BluetoothLe.initialize(); } catch (initErr) {}
       await this.ensurePermissions();
 
       if (!this.disconnectListener) {
         try {
           this.disconnectListener = await this.BluetoothLe.addListener('disconnected', (info) => {
-            this._log(`[Событие] Потеря связи на шаге [${this.currentStep}]: ${JSON.stringify(info)}`, "warn");
             this.connectionSessionId++; 
             this.isConnecting = false;
             clearTimeout(this.stableTimer);
 
             if (!this.isExplicitDisconnect && this.connectedDeviceId && !this.autoConnectBlocked) {
-              this._log("[JE Core] Планирование повторного подключения...");
               this.updateUI("reconnecting");
               this.scheduleReconnect(3000);
             } else {
               this.updateUI("disconnected");
             }
           });
-        } catch (err) {
-          this._log(`Ошибка регистрации слушателя отключения: ${err?.message || err}`, "warn");
-        }
+        } catch (err) {}
       }
 
       const savedName = localStorage.getItem("savedDeviceName");
-      if (savedName) {
-        this._setElementText('deviceName', savedName);
-      }
+      if (savedName) this._setElementText('deviceName', savedName);
 
       if (this.autoConnect && !this.autoConnectBlocked) {
         const savedId = localStorage.getItem("savedDeviceId");
         if (savedId) {
-          this._log(`Найдено сохраненное ID: ${savedId}. Запуск автоподключения...`);
           this.connectedDeviceId = savedId;
           this.isExplicitDisconnect = false;
           this.connectNativeBLE(savedId);
@@ -244,39 +213,32 @@ class BaseBLEDevice {
       } else if (this.autoConnectBlocked) {
         this.updateUI("crash_loop");
       }
-    } catch (e) {
-      this._log(`Ошибка при инициализации BLE: ${e?.message || e}`, "error");
-    }
+    } catch (e) {}
   }
 
   async ensurePermissions() {
     if (this.hasPermissions) return;
-
     try {
       if (typeof this.BluetoothLe.checkPermissions === 'function') {
         const status = await this.BluetoothLe.checkPermissions();
-        const connectGranted = status?.bluetoothConnect === 'granted' || status?.display === 'granted';
-        const scanGranted = status?.bluetoothScan === 'granted' || status?.display === 'granted';
-
-        if (connectGranted && scanGranted) {
+        if ((status?.bluetoothConnect === 'granted' || status?.display === 'granted') &&
+            (status?.bluetoothScan === 'granted' || status?.display === 'granted')) {
           this.hasPermissions = true;
           return;
         }
       }
-
       if (typeof this.BluetoothLe.requestPermissions === 'function') {
         await this.BluetoothLe.requestPermissions();
       }
       this.hasPermissions = true;
     } catch (permErr) {
-      this._log(`Предупреждение запроса разрешений: ${permErr?.message || permErr}`, "warn");
       this.hasPermissions = true;
     }
   }
 
   updateEspFwUI() {
-    const versionStr = `v${this.espFwVersion || '---'}`;
-    this._setElementText('espFwVersion', versionStr);
+    const versionStr = `${this.espFwVersion || '--'}`;
+    // Используем корректный идентификатор из index_3.html
     this._setElementText('espFwText', versionStr);
   }
 
@@ -307,12 +269,8 @@ class BaseBLEDevice {
       this.updateUI("switching");
 
       if (this.connectedDeviceId && this.BluetoothLe) {
-        this._log("[BLE] Смена устройства: закрытие текущей сессии...");
-        
         if (this.valueListener) {
-          try {
-            await this.valueListener.remove();
-          } catch (e) {}
+          try { await this.valueListener.remove(); } catch (e) {}
           this.valueListener = null;
         }
 
@@ -322,11 +280,8 @@ class BaseBLEDevice {
             service: this.serviceUuid,
             characteristic: this.txUuid
           }).catch(() => {});
-          
           await this.BluetoothLe.disconnect({ deviceId: this.connectedDeviceId });
-        } catch (discErr) {
-          this._log(`[BLE] Ошибка при отключении старого устройства: ${discErr?.message || discErr}`, "warn");
-        }
+        } catch (discErr) {}
 
         this.connectedDeviceId = null;
         this.rxBuffer = "";
@@ -344,8 +299,6 @@ class BaseBLEDevice {
           optionalServices: [this.serviceUuid]
         });
       } catch (nativeEx) {
-        this._log(`Нативный сбой при сканировании: ${nativeEx?.message || nativeEx}`, "error");
-        alert("Не удалось запустить поиск BLE. Проверьте разрешения геолокации и Bluetooth.");
         this.isConnecting = false;
         this.updateUI("disconnected");
         return;
@@ -369,21 +322,15 @@ class BaseBLEDevice {
         this.updateUI("disconnected");
       }
     } catch (e) {
-      this._log(`Отмена выбора устройства: ${e?.message || e}`, "warn");
       this.isConnecting = false;
       this.updateUI("disconnected");
     }
   }
   
   async connectNativeBLE(deviceId) {
-    if (!deviceId || !this.BluetoothLe) return;
-    if (this.isConnecting) {
-      this._log("[BLE] Попытка подключения уже выполняется, пропуск.", "warn");
-      return;
-    }
+    if (!deviceId || !this.BluetoothLe || this.isConnecting) return;
 
     await this.ensurePermissions();
-
     const currentSession = ++this.connectionSessionId;
 
     try {
@@ -392,7 +339,6 @@ class BaseBLEDevice {
       clearTimeout(this.stableTimer);
 
       localStorage.setItem("ble_crash_pending", "1");
-
       this.updateUI("connecting");
       this.rxBuffer = "";
       this.streamDecoder = new TextDecoder('utf-8', { fatal: false });
@@ -400,24 +346,14 @@ class BaseBLEDevice {
 
       this._setCurrentStep("GATT_CONNECTING");
       await this.BluetoothLe.connect({ deviceId, timeout: 12000 });
-
       if (currentSession !== this.connectionSessionId) return;
 
       this._setCurrentStep("GATT_STABILIZING");
-      await this.emulatorDelay ? await this._delay(500) : await this._delay(1000);
-
+      await this._delay(1000);
       if (currentSession !== this.connectionSessionId) return;
 
       this._setCurrentStep("DISCOVER_SERVICES");
-      this._log("[BLE] Опрос GATT-сервисов...");
-      
-      try {
-        const servicesRes = await this.BluetoothLe.getServices({ deviceId });
-        this._log(`[BLE] Закешировано сервисов: ${servicesRes?.services?.length || 0}`);
-      } catch (servErr) {
-        this._log(`[BLE] Ошибка при чтении сервисов: ${servErr?.message || servErr}`, "warn");
-      }
-
+      try { await this.BluetoothLe.getServices({ deviceId }); } catch (servErr) {}
       if (currentSession !== this.connectionSessionId) return;
       await this._delay(600);
 
@@ -425,26 +361,17 @@ class BaseBLEDevice {
       if (typeof this.BluetoothLe.requestMtu === 'function') {
         try {
           const mtuRes = await this.BluetoothLe.requestMtu({ deviceId, mtu: 247 });
-          if (mtuRes && mtuRes.mtu) {
-            this.currentMtu = mtuRes.mtu;
-            this._log(`[BLE] Согласован MTU: ${this.currentMtu}`);
-          }
-        } catch (mtuErr) {
-          this._log(`[BLE] MTU отклонен (остаемся на ${this.currentMtu}): ${mtuErr?.message || mtuErr}`, "warn");
-        }
+          if (mtuRes && mtuRes.mtu) this.currentMtu = mtuRes.mtu;
+        } catch (mtuErr) {}
         if (currentSession !== this.connectionSessionId) return;
         await this._delay(600);
       }
 
       this._setCurrentStep("START_NOTIFICATIONS_EXEC");
-
       if (this.valueListener) {
-        try {
-          await this.valueListener.remove();
-        } catch (e) {}
+        try { await this.valueListener.remove(); } catch (e) {}
         this.valueListener = null;
       }
-
       if (currentSession !== this.connectionSessionId) return;
 
       try {
@@ -452,10 +379,7 @@ class BaseBLEDevice {
           'characteristicValueReceived',
           (result) => this._parseData(result)
         );
-        this._log("[BLE] Слушатель событий успешно зарегистрирован.");
-      } catch (listenErr) {
-        this._log(`[WARN] Ошибка при добавлении addListener: ${listenErr?.message || listenErr}`, "warn");
-      }
+      } catch (listenErr) {}
 
       if (currentSession !== this.connectionSessionId) return;
       await this._delay(500);
@@ -466,9 +390,7 @@ class BaseBLEDevice {
           service: this.serviceUuid,
           characteristic: this.txUuid
         });
-        this._log("[BLE] Подписка startNotifications успешно активирована.");
       } catch (notifErr) {
-        this._log(`[WARN] Ошибка при вызове startNotifications: ${notifErr?.message || notifErr}`, "warn");
         await this._delay(800);
         if (currentSession !== this.connectionSessionId) return;
         await this.BluetoothLe.startNotifications({
@@ -488,12 +410,10 @@ class BaseBLEDevice {
       if (currentSession !== this.connectionSessionId) return;
 
       await this._safeSendHandshake();
-
       this._setCurrentStep("OPERATIONAL_PENDING_GUARD");
 
       this.stableTimer = setTimeout(() => {
         if (this.connectedDeviceId && !this.isConnecting && currentSession === this.connectionSessionId) {
-          this._log("[Crash Guard] Сессия стабильна (>5с). Флаг аварийного падения снят.");
           localStorage.removeItem("ble_crash_pending");
           this.autoConnectBlocked = false;
           this._setCurrentStep("STABLE_OPERATIONAL");
@@ -502,7 +422,6 @@ class BaseBLEDevice {
 
     } catch (err) {
       if (currentSession === this.connectionSessionId) {
-        this._log(`Ошибка подключения на шаге [${this.currentStep}]: ${err?.message || err}`, "error");
         this.updateUI("disconnected");
       }
     } finally {
@@ -514,21 +433,13 @@ class BaseBLEDevice {
   
   async _safeSendHandshake() {
     this._setCurrentStep("SEND_GET_SYS");
-
     try {
       const payload = JSON.stringify({ cmd: "get_sys" });
-
       await Promise.race([
         this.sendCmd(payload),
-        new Promise((_, reject) =>
-          setTimeout(() => reject(new Error("Таймаут ожидания ответа на get_sys")), 3000)
-        )
+        new Promise((_, reject) => setTimeout(() => reject(new Error("Таймаут get_sys")), 3000))
       ]);
-
-      this._log("[BLE] Запрос get_sys успешно передан устройству", "info");
-    } catch (cmdErr) {
-      this._log(`[WARN] Ошибка/таймаут при отправке get_sys: ${cmdErr?.message || cmdErr}. Соединение сохранено.`, "warn");
-    }
+    } catch (cmdErr) {}
   }
 
   async disconnectBLE() {
@@ -539,13 +450,10 @@ class BaseBLEDevice {
     
     localStorage.removeItem("ble_crash_pending");
     this.autoConnectBlocked = false;
-
     this._setCurrentStep("DISCONNECTING");
 
     if (this.valueListener) {
-      try {
-        await this.valueListener.remove();
-      } catch (e) {}
+      try { await this.valueListener.remove(); } catch (e) {}
       this.valueListener = null;
     }
 
@@ -556,11 +464,8 @@ class BaseBLEDevice {
           service: this.serviceUuid,
           characteristic: this.txUuid
         }).catch(() => {});
-        
         await this.BluetoothLe.disconnect({ deviceId: this.connectedDeviceId }); 
-      } catch (e) {
-        this._log(`Ошибка при отключении: ${e?.message || e}`, "warn");
-      }
+      } catch (e) {}
     }
     this.connectedDeviceId = null;
     this.rxBuffer = "";
@@ -577,10 +482,7 @@ class BaseBLEDevice {
     }, delayMs);
   }
 
-  // --- НАДЕЖНЫЙ ПАРСИНГ ВХОДЯЩИХ ДАННЫХ (Brace-Counting JSON Stream Parser) ---
   _parseData(result) {
-    this._log(`[RX RAW] -> ${JSON.stringify(result)}`);
-
     if (this.isOtaInProgress || !result) return;
 
     try {
@@ -588,7 +490,6 @@ class BaseBLEDevice {
       if (rawVal === undefined || rawVal === null) return;
 
       let bytes;
-
       if (rawVal instanceof Uint8Array) {
         bytes = rawVal;
       } else if (rawVal instanceof DataView) {
@@ -604,9 +505,7 @@ class BaseBLEDevice {
           try {
             const binaryString = window.atob(cleanStr);
             bytes = new Uint8Array(binaryString.length);
-            for (let i = 0; i < binaryString.length; i++) {
-              bytes[i] = binaryString.charCodeAt(i);
-            }
+            for (let i = 0; i < binaryString.length; i++) bytes[i] = binaryString.charCodeAt(i);
           } catch (b64Err) {
             bytes = new TextEncoder().encode(cleanStr);
           }
@@ -623,25 +522,16 @@ class BaseBLEDevice {
       try {
         chunk = this.streamDecoder.decode(bytes, { stream: true });
       } catch (decErr) {
-        this._log(`[RX ERROR] Ошибка декодирования потока: ${decErr?.message || decErr}`, "warn");
         this.streamDecoder = new TextDecoder('utf-8', { fatal: false });
         return;
       }
 
       this.rxBuffer += chunk;
-
       if (this.rxBuffer.length > this.maxBufferSize) {
-        this._log("[RX ERROR] Буфер переполнен, очистка с сохранением хвоста...", "warn");
         const lastOpen = this.rxBuffer.lastIndexOf('{');
-        if (lastOpen !== -1 && this.rxBuffer.length - lastOpen < this.maxBufferSize / 2) {
-          this.rxBuffer = this.rxBuffer.substring(lastOpen);
-        } else {
-          this.rxBuffer = "";
-        }
+        this.rxBuffer = (lastOpen !== -1) ? this.rxBuffer.substring(lastOpen) : "";
         return;
       }
-
-      let parsedCount = 0;
 
       while (true) {
         const openIdx = this.rxBuffer.indexOf('{');
@@ -649,63 +539,32 @@ class BaseBLEDevice {
           if (this.rxBuffer.length > 2048) this.rxBuffer = "";
           break;
         }
+        if (openIdx > 0) this.rxBuffer = this.rxBuffer.substring(openIdx);
 
-        if (openIdx > 0) {
-          this.rxBuffer = this.rxBuffer.substring(openIdx);
-        }
-
-        let depth = 0;
-        let inString = false;
-        let escape = false;
-        let closeIdx = -1;
-
+        let depth = 0, inString = false, escape = false, closeIdx = -1;
         for (let i = 0; i < this.rxBuffer.length; i++) {
           const char = this.rxBuffer[i];
-          if (escape) {
-            escape = false;
-            continue;
-          }
-          if (char === '\\' && inString) {
-            escape = true;
-            continue;
-          }
-          if (char === '"') {
-            inString = !inString;
-            continue;
-          }
+          if (escape) { escape = false; continue; }
+          if (char === '\\' && inString) { escape = true; continue; }
+          if (char === '"') { inString = !inString; continue; }
           if (!inString) {
-            if (char === '{') {
-              depth++;
-            } else if (char === '}') {
+            if (char === '{') depth++;
+            else if (char === '}') {
               depth--;
-              if (depth === 0) {
-                closeIdx = i;
-                break;
-              }
+              if (depth === 0) { closeIdx = i; break; }
             }
           }
         }
 
-        if (closeIdx === -1) {
-          break;
-        }
+        if (closeIdx === -1) break;
 
         const candidate = this.rxBuffer.substring(0, closeIdx + 1);
         this.rxBuffer = this.rxBuffer.substring(closeIdx + 1);
 
         try {
           const data = JSON.parse(candidate);
-          parsedCount++;
-          this._log(`[RX JSON #${parsedCount}] Успешно распарсено`);
 
-          const currentCounter = data.counter !== undefined ? data.counter : data.cnt;
-          if (currentCounter !== undefined) {
-            this._log(`[COUNTER] Получено значение счётчика: ${currentCounter}`, "info");
-            this._setElementText('telemetryData', currentCounter);
-          } else if (data.val !== undefined) {
-            this._setElementText('telemetryData', data.val);
-          }
-
+          // Проверка получения версии прошивки (поддерживаем version, fw, sys)
           if (data.version || data.fw || data.sys) {
             if (data.version) {
               this.espFwVersion = data.version;
@@ -716,75 +575,49 @@ class BaseBLEDevice {
                 ? (data.sys.fw || data.sys.version || JSON.stringify(data.sys)) 
                 : data.sys;
             }
-            this._log(`[INFO] Версия прошивки получена: ${this.espFwVersion}`);
             this.updateEspFwUI();
           }
 
+          // Передаем распарсенный объект в кастомный обработчик приложения (MainApp)
           this.onTelemetry(data);
-        } catch (e) {
-          this._log(`[RX ERROR] Ошибка JSON.parse для кандидата: "${candidate}". Ошибка: ${e.message}`, "warn");
-        }
+        } catch (e) {}
       }
-    } catch (e) {
-      this._log(`[RX FATAL] Ошибка в _parseData: ${e?.message || e}`, "error");
-    }
+    } catch (e) {}
   }
 
   async _writeRaw(deviceId, service, characteristic, uint8Bytes) {
     const uint8ToHex = (bytes) => Array.from(bytes).map(b => b.toString(16).padStart(2, '0')).join(' ');
-    const hexValue = uint8ToHex(uint8Bytes);
-  
-    await this.BluetoothLe.write({ deviceId, service, characteristic, value: hexValue });
+    await this.BluetoothLe.write({ deviceId, service, characteristic, value: uint8ToHex(uint8Bytes) });
     return true;
   }  
   
   async _sendBytes(uint8Bytes, timeoutMs = 3000) {
-    if (!this.connectedDeviceId || !this.BluetoothLe) {
-      throw new Error("Устройство не подключено");
-    }
+    if (!this.connectedDeviceId || !this.BluetoothLe) throw new Error("Устройство не подключено");
 
     this._writeQueue = this._writeQueue.then(async () => {
-      const writePromise = this._writeRaw(
-        this.connectedDeviceId,
-        this.serviceUuid,
-        this.rxUuid,
-        uint8Bytes
-      );
-
+      const writePromise = this._writeRaw(this.connectedDeviceId, this.serviceUuid, this.rxUuid, uint8Bytes);
       let timeoutId;
       const timeoutPromise = new Promise((_, reject) => {
-        timeoutId = setTimeout(() => reject(new Error("Таймаут отправки чанка по BLE")), timeoutMs);
+        timeoutId = setTimeout(() => reject(new Error("Таймаут отправки")), timeoutMs);
       });
-
       try {
         await Promise.race([writePromise, timeoutPromise]);
       } finally {
         clearTimeout(timeoutId);
       }
-    }).catch(err => {
-      throw err;
-    });
+    }).catch(err => { throw err; });
 
     return this._writeQueue;
   }
   
   async sendCmd(cmd) {
-    if (!this.connectedDeviceId || !this.BluetoothLe) {
-      throw new Error("Устройство не подключено");
-    }
-    try {
-      this._log(`[TX CMD] Отправка команды: ${cmd}`);
-      const bytes = new TextEncoder().encode(cmd);
-      await this._sendBytes(bytes, 3000);
-    } catch (e) {
-      this._log(`[TX ERROR] Ошибка отправки команды "${cmd}": ${e?.message || e}`, "error");
-      throw e;
-    }
+    if (!this.connectedDeviceId || !this.BluetoothLe) throw new Error("Устройство не подключено");
+    const bytes = new TextEncoder().encode(cmd);
+    await this._sendBytes(bytes, 3000);
   }
 
   async updateESP32Firmware(source = null) {
     if (!confirm("Начать прошивку ESP32 по BLE?")) return;
-
     const sessionAtStart = this.connectionSessionId;
 
     try {
@@ -792,7 +625,6 @@ class BaseBLEDevice {
       this.updateUI("ota_start");
 
       let bytes;
-
       if (source instanceof Uint8Array) {
         bytes = source;
       } else if (source instanceof ArrayBuffer) {
@@ -803,13 +635,12 @@ class BaseBLEDevice {
           : `https://github.com/${this.repoOwner}/${this.repoName}/releases/download/latest/firmware.bin`;
 
         const res = await fetch(binUrl);
-        if (!res.ok) throw new Error(`Ошибка загрузки firmware.bin (Код: ${res.status})`);
-        const arrayBuffer = await res.arrayBuffer();
-        bytes = new Uint8Array(arrayBuffer);
+        if (!res.ok) throw new Error(`Ошибка загрузки firmware.bin (${res.status})`);
+        bytes = new Uint8Array(await res.arrayBuffer());
       }
 
       if (!this.isOtaInProgress || sessionAtStart !== this.connectionSessionId || !this.connectedDeviceId) {
-        throw new Error("Соединение прервано перед началом OTA");
+        throw new Error("Соединение прервано");
       }
 
       await this.sendCmd(JSON.stringify({ cmd: "OTA_START", size: bytes.length }));
@@ -820,36 +651,26 @@ class BaseBLEDevice {
 
       for (let offset = 0; offset < total; offset += chunkSize) {
         if (!this.isOtaInProgress || sessionAtStart !== this.connectionSessionId || !this.connectedDeviceId) {
-          throw new Error("Прошивка прервана: устройство отключено");
+          throw new Error("Прошивка прервана");
         }
-
-        const chunk = bytes.slice(offset, offset + chunkSize);
-        await this._sendBytes(chunk, 4000);
-
+        await this._sendBytes(bytes.slice(offset, offset + chunkSize), 4000);
         await this._delay(15);
 
         const percent = Math.round((offset / total) * 100);
         if (offset % (chunkSize * 5) === 0 || offset + chunkSize >= total) {
-          if (typeof this.onOtaProgressCallback === 'function') {
-            this.onOtaProgressCallback(percent);
-          }
+          if (typeof this.onOtaProgressCallback === 'function') this.onOtaProgressCallback(percent);
           this._setElementText('bleStatus', `Прошивка ESP32: ${percent}%`);
         }
       }
 
       await this._delay(200);
-      
       const fileCrc = this._calculateCRC32(bytes);
-      this._log(`[OTA] Вычислен CRC32 файла: 0x${fileCrc.toString(16)}`);
-
       await this.sendCmd(JSON.stringify({ cmd: "OTA_END", crc: fileCrc }));
       
       alert("Прошивка успешно завершена! ESP32 перезагружается.");
       this.isOtaInProgress = false;
       this.disconnectBLE();
-
     } catch (e) {
-      this._log(`Ошибка OTA: ${e?.message || e}`, "error");
       alert("Ошибка прошивки: " + e.message);
       this.isOtaInProgress = false;
       this.updateUI("connected");
@@ -871,9 +692,7 @@ class BaseBLEDevice {
       this._setElementStyle('bottomConnectBar', 'display', 'none');
       this._setElementStyle('btnDisconnect', 'display', 'block');
     } else if (state === "connecting" || state === "reconnecting" || state === "switching") {
-      if (state === "switching") textState = "Поиск устройств...";
-      else textState = state === "connecting" ? "Подключение..." : "Поиск...";
-      
+      textState = state === "switching" ? "Поиск устройств..." : (state === "connecting" ? "Подключение..." : "Поиск...");
       this._setElementClass('bleStatus', 'status pending spinner-active');
       this._setElementStyle('bottomConnectBar', 'display', 'none');
       this._setElementStyle('btnDisconnect', 'display', 'block');
