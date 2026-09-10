@@ -730,17 +730,7 @@ class BaseBLEDevice {
     const uint8ToHex = (bytes) => Array.from(bytes).map(b => b.toString(16).padStart(2, '0')).join('');
     const hexValue = uint8ToHex(uint8Bytes);
   
-    // Сначала шлем без ожидания, чтобы избежать блокировки очереди
-    if (typeof this.BluetoothLe.writeWithoutResponse === 'function') {
-      try {
-        await this.BluetoothLe.writeWithoutResponse({ deviceId, service, characteristic, value: hexValue });
-        return true;
-      } catch (e) {
-        this._log(`[TX WARN] writeWithoutResponse error: ${e}`, "warn");
-      }
-    }
-  
-    // Фоллбэк
+    // Жестко используем write с подтверждением без фоллбэков
     await this.BluetoothLe.write({ deviceId, service, characteristic, value: hexValue });
     return true;
   }
