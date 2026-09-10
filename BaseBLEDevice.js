@@ -763,18 +763,13 @@ class BaseBLEDevice {
       throw new Error("Устройство не подключено");
     }
 
-    const dataView = new DataView(
-      uint8Bytes.buffer,
-      uint8Bytes.byteOffset,
-      uint8Bytes.byteLength
+    // Передаем параметры позиционно, как ждет _writeRaw
+    const writePromise = this._writeRaw(
+      this.connectedDeviceId,
+      this.serviceUuid,
+      this.rxUuid,
+      uint8Bytes
     );
-
-    const writePromise = this._writeRaw({
-      deviceId: this.connectedDeviceId,
-      service: this.serviceUuid,
-      characteristic: this.rxUuid,
-      value: dataView
-    });
 
     let timeoutId;
     const timeoutPromise = new Promise((_, reject) => {
