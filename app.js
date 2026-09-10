@@ -23,6 +23,13 @@ class MainApp extends BaseApp {
       const uptimeEl = document.getElementById('uptimeData');
       if (uptimeEl) uptimeEl.innerText = `${currentUptime} с`;
     }
+
+    // Обработка системных данных и версии прошивки (ответ на get_sys / sys)
+    const fwVersion = data.fw || (data.sys && data.sys.fw) || data.version;
+    if (fwVersion) {
+      const fwEl = document.getElementById('espFwText');
+      if (fwEl) fwEl.innerText = fwVersion;
+    }
   }
 }
 
