@@ -727,13 +727,13 @@ class BaseBLEDevice {
   }
 
   async _writeRaw(deviceId, service, characteristic, uint8Bytes) {
-    const uint8ToHex = (bytes) => Array.from(bytes).map(b => b.toString(16).padStart(2, '0')).join('');
+    // Плагин под Android ожидает hex-строку с пробелами между байтами
+    const uint8ToHex = (bytes) => Array.from(bytes).map(b => b.toString(16).padStart(2, '0')).join(' ');
     const hexValue = uint8ToHex(uint8Bytes);
   
-    // Жестко используем write с подтверждением без фоллбэков
     await this.BluetoothLe.write({ deviceId, service, characteristic, value: hexValue });
     return true;
-  }
+  }  
   
   // --- ЗАЩИЩЕННАЯ ОЧЕРЕДЬ ОТПРАВКИ (Write Mutex) ---
   async _sendBytes(uint8Bytes, timeoutMs = 3000) {
