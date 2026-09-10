@@ -131,9 +131,33 @@ jobs:
 
       - name: Configure Auto-Versioning
         run: |
-          sed -i -E "s/versionCode([ =]+)[0-9]+/versionCode\1${GITHUB_RUN_NUMBER}/g" android/app/build.gradle 2>/dev/null || true
-          sed -i -E "s/versionName([ =]+)\"[^\"]+\"/versionName\1\"1.0.${GITHUB_RUN_NUMBER}\"/g" android/app/build.gradle 2>/dev/null || true
-
+          node -e '
+            const fs = require("fs");
+            
+            // Читаем мажорную и минорную версию из package.json (например, "1.1")
+            const pkgPath = "package.json";
+            const pkg = JSON.parse(fs.readFileSync(pkgPath, "utf8"));
+            const parts = pkg.version.split(".");
+            const major = parts[0] || "1";
+            const minor = parts[1] || "0";
+            
+            const newVersion = `${major}.${minor}.${process.env.GITHUB_RUN_NUMBER}`;
+            
+            // Записываем итоговую версию обратно в package.json
+            pkg.version = newVersion;
+            fs.writeFileSync(pkgPath, JSON.stringify(pkg, null, 2));
+            
+            // Обновляем build.gradle для Android
+            const gradlePath = "android/app/build.gradle";
+            if (fs.existsSync(gradlePath)) {
+              let gradle = fs.readFileSync(gradlePath, "utf8");
+              gradle = gradle.replace(/versionCode\s+[0-9]+/, `versionCode ${process.env.GITHUB_RUN_NUMBER}`);
+              gradle = gradle.replace(/versionName\s+\"[^\"]+\"/, `versionName "${newVersion}"`);
+              fs.writeFileSync(gradlePath, gradle, "utf8");
+            }
+            
+            console.log(`Version set to: ${newVersion}, Code: ${process.env.GITHUB_RUN_NUMBER}`);
+          '
       - name: Build Debug APK with Gradle
         run: |
           cd android
