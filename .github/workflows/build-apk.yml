@@ -38,8 +38,8 @@ jobs:
         run: npm install
 
       - name: Patch package.json version
-              run: |
-                sed -i -E "s/\"version\": \"[^\"]+\"/\"version\": \"1.0.${GITHUB_RUN_NUMBER}\"/" package.json
+        run: |
+          sed -i -E "s/\"version\": \"[^\"]+\"/\"version\": \"1.0.${GITHUB_RUN_NUMBER}\"/" package.json
                 
       - name: Prepare Web Assets
         run: |
