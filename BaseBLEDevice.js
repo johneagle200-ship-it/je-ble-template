@@ -727,40 +727,22 @@ class BaseBLEDevice {
   }
 
   async _writeRaw(deviceId, service, characteristic, uint8Bytes) {
-    if (!this.BluetoothLe) throw new Error("Plugin BluetoothLe unavailable");
-  
-    // Новый конвертер: преобразуем массив байтов в правильную Hex-строку
-    const uint8ToHex = (bytes) => {
-      return Array.from(bytes)
-        .map(b => b.toString(16).padStart(2, '0'))
-        .join('');
-    };
-  
+    const uint8ToHex = (bytes) => Array.from(bytes).map(b => b.toString(16).padStart(2, '0')).join('');
     const hexValue = uint8ToHex(uint8Bytes);
   
-    try {
-      await this.BluetoothLe.write({
-        deviceId,
-        service,
-        characteristic,
-        value: hexValue // Передаем корректный Hex-формат вместо Base64
-      });
-      return true;
-    } catch (eResp) {
-      this._log(`[TX WARN] write с ответом не удался, пробуем writeWithoutResponse: ${eResp?.message || eResp}`, "warn");
-    }
-  
+    // Сначала шлем без ожидания, чтобы избежать блокировки очереди
     if (typeof this.BluetoothLe.writeWithoutResponse === 'function') {
-      await this.BluetoothLe.writeWithoutResponse({
-        deviceId,
-        service,
-        characteristic,
-        value: hexValue // Передаем корректный Hex-формат
-      });
-      return true;
+      try {
+        await this.BluetoothLe.writeWithoutResponse({ deviceId, service, characteristic, value: hexValue });
+        return true;
+      } catch (e) {
+        this._log(`[TX WARN] writeWithoutResponse error: ${e}`, "warn");
+      }
     }
   
-    throw new Error("Методы записи недоступны в плагине BluetoothLe");
+    // Фоллбэк
+    await this.BluetoothLe.write({ deviceId, service, characteristic, value: hexValue });
+    return true;
   }
   
   // --- ЗАЩИЩЕННАЯ ОЧЕРЕДЬ ОТПРАВКИ (Write Mutex) ---
