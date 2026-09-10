@@ -37,6 +37,9 @@ jobs:
       - name: Install Dependencies
         run: npm install
 
+      - name: Patch package.json version
+        run: sed -i -E "s/\"version\": \"[^\"]+\"/\"version\": \"1.0.${GITHUB_RUN_NUMBER}\"/" package.json
+
       - name: Prepare Web Assets
         run: |
           mkdir -p www
@@ -146,8 +149,8 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           files: android/app/build/outputs/apk/debug/app-debug.apk
-          tag_name: latest
-          name: "Отладочная сборка (Debug)"
+          tag_name: v1.0.${{ github.run_number }}
+          name: "Сборка v1.0.${{ github.run_number }}"
           allowUpdates: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
