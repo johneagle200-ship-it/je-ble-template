@@ -46,7 +46,6 @@ class AppUpdater {
     if (menuEl) menuEl.innerText = verStr;
   }
 
-  // Проверка релиза через GitHub API
   async checkForUpdates() {
     try {
       const apiUrl = `https://api.github.com/repos/${this.repoOwner}/${this.repoName}/releases/latest`;
@@ -58,10 +57,8 @@ class AppUpdater {
       if (!res.ok) return;
 
       const release = await res.json();
-      // Получаем версию из тега (например "v1.0.59" -> "1.0.59")
       const remoteVer = release.tag_name ? release.tag_name.replace(/^v/, '') : null;
 
-      // Находим ассет с расширением .apk
       const apkAsset = release.assets?.find(a => a.name === 'app-debug.apk') ||
                        release.assets?.find(a => a.name.endsWith('.apk'));
 
@@ -110,17 +107,16 @@ class AppUpdater {
     }
 
     try {
-      const downloadUrl = this.latestApkUrl || 
-        `https://github.com/${this.repoOwner}/${this.repoName}/releases/download/latest/app-debug.apk`;
+      if (!this.latestApkUrl) throw new Error("URL для скачивания не найден");
+      const downloadUrl = this.latestApkUrl;
 
       this._log(`Скачивание APK: ${downloadUrl}`);
 
       if (window.Capacitor?.isNativePlatform() && Filesystem) {
-        // Скачиваем нативно через Java
         const downloadResult = await Filesystem.downloadFile({
           url: downloadUrl,
           path: 'app-debug.apk',
-          directory: 'CACHE',
+          directory: 'DATA',
           recursive: true
         });
 
