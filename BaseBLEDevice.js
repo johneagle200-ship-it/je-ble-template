@@ -650,21 +650,19 @@ class BaseBLEDevice {
     if (!this.connectedDeviceId || !this.BluetoothLe) {
       throw new Error("Устройство не подключено");
     }
-  
-    // Конвертируем сразу в base64 — это самый надежный формат для Capacitor BLE бэкэнда
-    let binary = "";
-    for (let i = 0; i < uint8Bytes.byteLength; i++) {
-      binary += String.fromCharCode(uint8Bytes[i]);
-    }
-    const base64Val = window.btoa(binary);
-  
-    this._log(`[TX BYTES] Отправка ${uint8Bytes.length} байт (Base64)`);
-  
+
+    // Плагин capacitor-community/bluetooth-le на Android ожидает строго HEX-строку
+    const hexVal = Array.from(uint8Bytes)
+      .map(b => b.toString(16).padStart(2, '0'))
+      .join('');
+
+    this._log(`[TX BYTES] Отправка ${uint8Bytes.length} байт (Hex)`);
+
     await this._writeRaw({
       deviceId: this.connectedDeviceId,
       service: this.serviceUuid,
       characteristic: this.rxUuid,
-      value: base64Val
+      value: hexVal
     });
   }
   
