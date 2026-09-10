@@ -396,12 +396,12 @@ class BaseBLEDevice {
       this.currentMtu = 23;
 
       this._setCurrentStep("GATT_CONNECTING");
-      await this.BluetoothLe.connect({ deviceId, timeout: 10000 });
+      await this.BluetoothLe.connect({ deviceId, timeout: 12000 });
 
       if (currentSession !== this.connectionSessionId) return;
 
       this._setCurrentStep("GATT_STABILIZING");
-      await this._delay(800);
+      await this._delay(1000); // Увеличенная пауза для стабилизации стека
 
       if (currentSession !== this.connectionSessionId) return;
 
@@ -416,7 +416,7 @@ class BaseBLEDevice {
       }
 
       if (currentSession !== this.connectionSessionId) return;
-      await this._delay(500);
+      await this._delay(600);
 
       this._setCurrentStep("REQUEST_MTU");
       if (typeof this.BluetoothLe.requestMtu === 'function') {
@@ -430,7 +430,7 @@ class BaseBLEDevice {
           this._log(`[BLE] MTU отклонен (остаемся на ${this.currentMtu}): ${mtuErr?.message || mtuErr}`, "warn");
         }
         if (currentSession !== this.connectionSessionId) return;
-        await this._delay(400);
+        await this._delay(600);
       }
 
       this._setCurrentStep("START_NOTIFICATIONS_EXEC");
@@ -455,7 +455,7 @@ class BaseBLEDevice {
       }
 
       if (currentSession !== this.connectionSessionId) return;
-      await this._delay(400);
+      await this._delay(500);
 
       try {
         await this.BluetoothLe.startNotifications({
@@ -466,7 +466,7 @@ class BaseBLEDevice {
         this._log("[BLE] Подписка startNotifications успешно активирована.");
       } catch (notifErr) {
         this._log(`[WARN] Ошибка при вызове startNotifications: ${notifErr?.message || notifErr}`, "warn");
-        await this._delay(600);
+        await this._delay(800);
         if (currentSession !== this.connectionSessionId) return;
         await this.BluetoothLe.startNotifications({
           deviceId,
@@ -476,12 +476,13 @@ class BaseBLEDevice {
       }
 
       if (currentSession !== this.connectionSessionId) return;
-      await this._delay(800);
+      // Даем стеку полностью успокоиться после включения нотификаций
+      await this._delay(1200);
 
       this._setCurrentStep("CONNECTED_WAITING_STABILITY");
       this.updateUI("connected");
 
-      await this._delay(500);
+      await this._delay(800);
       if (currentSession !== this.connectionSessionId) return;
 
       await this._safeSendHandshake();
@@ -508,7 +509,7 @@ class BaseBLEDevice {
       }
     }
   }
-
+  
   async _safeSendHandshake() {
     this._setCurrentStep("SEND_GET_SYS");
 
@@ -730,11 +731,10 @@ class BaseBLEDevice {
   async _writeRaw(deviceId, service, characteristic, uint8Bytes) {
     if (!this.BluetoothLe) throw new Error("Plugin BluetoothLe unavailable");
 
-    // Безопасное преобразование Uint8Array в Base64 для передачи через мост Capacitor
     const uint8ToBase64 = (bytes) => {
       let binary = '';
       const len = bytes.byteLength;
-      const chunkSize = 0x8000; // Пачками по 32KB во избежание переполнения стека
+      const chunkSize = 0x8000;
       for (let i = 0; i < len; i += chunkSize) {
         const chunk = bytes.subarray(i, i + chunkSize);
         binary += String.fromCharCode.apply(null, chunk);
@@ -744,27 +744,30 @@ class BaseBLEDevice {
 
     const base64Value = uint8ToBase64(uint8Bytes);
 
-    if (typeof this.BluetoothLe.writeWithoutResponse === 'function') {
-      try {
-        await this.BluetoothLe.writeWithoutResponse({
-          deviceId,
-          service,
-          characteristic,
-          value: base64Value
-        });
-        return true;
-      } catch (eNoResp) {
-        this._log(`[TX WARN] writeWithoutResponse не удался, пробуем write: ${eNoResp?.message || eNoResp}`, "warn");
-      }
+    // Для надежности при инициализации и коротких команд сначала пробуем write (с ответом)
+    try {
+      await this.BluetoothLe.write({
+        deviceId,
+        service,
+        characteristic,
+        value: base64Value
+      });
+      return true;
+    } catch (eResp) {
+      this._log(`[TX WARN] write с ответом не удался, пробуем writeWithoutResponse: ${eResp?.message || eResp}`, "warn");
     }
 
-    await this.BluetoothLe.write({
-      deviceId,
-      service,
-      characteristic,
-      value: base64Value
-    });
-    return true;
+    if (typeof this.BluetoothLe.writeWithoutResponse === 'function') {
+      await this.BluetoothLe.writeWithoutResponse({
+        deviceId,
+        service,
+        characteristic,
+        value: base64Value
+      });
+      return true;
+    }
+
+    throw new Error("Методы записи недоступны в плагине BluetoothLe");
   }
   
 async _sendBytes(uint8Bytes, timeoutMs = 3000) {
