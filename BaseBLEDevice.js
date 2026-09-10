@@ -758,12 +758,11 @@ class BaseBLEDevice {
     return true;
   }
   
-  async _sendBytes(uint8Bytes, timeoutMs = 3000) {
+async _sendBytes(uint8Bytes, timeoutMs = 3000) {
     if (!this.connectedDeviceId || !this.BluetoothLe) {
       throw new Error("Устройство не подключено");
     }
 
-    // Передаем параметры позиционно, как ждет _writeRaw
     const writePromise = this._writeRaw(
       this.connectedDeviceId,
       this.serviceUuid,
