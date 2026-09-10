@@ -18,6 +18,9 @@ class BaseBLEDevice {
     this.reconnectTimer = null;
     this.isOtaInProgress = false;
 
+    // --- ЗАЩИТА ОТ ГОНОК СОСТОЯНИЙ (Session Guard) ---
+    this.connectionSessionId = 0;
+
     // --- CRASH GUARD (Энергонезависимая защита) ---
     this.minStableSessionMs = config.minStableSessionMs || 5000;
     this.stableTimer = null;
@@ -205,6 +208,7 @@ class BaseBLEDevice {
         try {
           this.disconnectListener = await this.BluetoothLe.addListener('disconnected', (info) => {
             this._log(`[Событие] Потеря связи на шаге [${this.currentStep}]: ${JSON.stringify(info)}`, "warn");
+            this.connectionSessionId++; // Инвалидируем текущую сессию подключения
             this.isConnecting = false;
             clearTimeout(this.stableTimer);
 
@@ -288,6 +292,8 @@ class BaseBLEDevice {
     if (this.isConnecting) return;
     await this.ensurePermissions();
 
+    const currentSession = ++this.connectionSessionId;
+
     try {
       this.resetCrashLock();
       this.isConnecting = true;
@@ -324,6 +330,8 @@ class BaseBLEDevice {
         await this._delay(500);
       }
 
+      if (currentSession !== this.connectionSessionId) return;
+
       let result = null;
       try {
         result = await this.BluetoothLe.requestDevice({ 
@@ -339,6 +347,8 @@ class BaseBLEDevice {
         this.updateUI("disconnected");
         return;
       }
+
+      if (currentSession !== this.connectionSessionId) return;
 
       if (result && result.deviceId) {
         const deviceName = result.name || result.localName || result.deviceId;
@@ -363,9 +373,15 @@ class BaseBLEDevice {
   }
   
   async connectNativeBLE(deviceId) {
-    if (this.isConnecting || !deviceId) return;
+    if (!deviceId || !this.BluetoothLe) return;
+    if (this.isConnecting) {
+      this._log("[BLE] Попытка подключения уже выполняется, пропуск.", "warn");
+      return;
+    }
 
     await this.ensurePermissions();
+
+    const currentSession = ++this.connectionSessionId;
 
     try {
       this.isConnecting = true;
@@ -382,8 +398,12 @@ class BaseBLEDevice {
       this._setCurrentStep("GATT_CONNECTING");
       await this.BluetoothLe.connect({ deviceId, timeout: 10000 });
 
+      if (currentSession !== this.connectionSessionId) return;
+
       this._setCurrentStep("GATT_STABILIZING");
       await this._delay(800);
+
+      if (currentSession !== this.connectionSessionId) return;
 
       this._setCurrentStep("DISCOVER_SERVICES");
       this._log("[BLE] Опрос GATT-сервисов...");
@@ -395,6 +415,7 @@ class BaseBLEDevice {
         this._log(`[BLE] Ошибка при чтении сервисов: ${servErr?.message || servErr}`, "warn");
       }
 
+      if (currentSession !== this.connectionSessionId) return;
       await this._delay(500);
 
       this._setCurrentStep("REQUEST_MTU");
@@ -408,6 +429,7 @@ class BaseBLEDevice {
         } catch (mtuErr) {
           this._log(`[BLE] MTU отклонен (остаемся на ${this.currentMtu}): ${mtuErr?.message || mtuErr}`, "warn");
         }
+        if (currentSession !== this.connectionSessionId) return;
         await this._delay(400);
       }
 
@@ -420,6 +442,8 @@ class BaseBLEDevice {
         this.valueListener = null;
       }
 
+      if (currentSession !== this.connectionSessionId) return;
+
       try {
         this.valueListener = await this.BluetoothLe.addListener(
           'characteristicValueReceived',
@@ -430,6 +454,7 @@ class BaseBLEDevice {
         this._log(`[WARN] Ошибка при добавлении addListener: ${listenErr?.message || listenErr}`, "warn");
       }
 
+      if (currentSession !== this.connectionSessionId) return;
       await this._delay(400);
 
       try {
@@ -442,6 +467,7 @@ class BaseBLEDevice {
       } catch (notifErr) {
         this._log(`[WARN] Ошибка при вызове startNotifications: ${notifErr?.message || notifErr}`, "warn");
         await this._delay(600);
+        if (currentSession !== this.connectionSessionId) return;
         await this.BluetoothLe.startNotifications({
           deviceId,
           service: this.serviceUuid,
@@ -449,19 +475,21 @@ class BaseBLEDevice {
         });
       }
 
+      if (currentSession !== this.connectionSessionId) return;
       await this._delay(800);
 
       this._setCurrentStep("CONNECTED_WAITING_STABILITY");
       this.updateUI("connected");
 
       await this._delay(500);
+      if (currentSession !== this.connectionSessionId) return;
 
       await this._safeSendHandshake();
 
       this._setCurrentStep("OPERATIONAL_PENDING_GUARD");
 
       this.stableTimer = setTimeout(() => {
-        if (this.connectedDeviceId && !this.isConnecting) {
+        if (this.connectedDeviceId && !this.isConnecting && currentSession === this.connectionSessionId) {
           this._log("[Crash Guard] Сессия стабильна (>5с). Флаг аварийного падения снят.");
           localStorage.removeItem("ble_crash_pending");
           this.autoConnectBlocked = false;
@@ -470,10 +498,14 @@ class BaseBLEDevice {
       }, this.minStableSessionMs);
 
     } catch (err) {
-      this._log(`Ошибка подключения на шаге [${this.currentStep}]: ${err?.message || err}`, "error");
-      this.updateUI("disconnected");
+      if (currentSession === this.connectionSessionId) {
+        this._log(`Ошибка подключения на шаге [${this.currentStep}]: ${err?.message || err}`, "error");
+        this.updateUI("disconnected");
+      }
     } finally {
-      this.isConnecting = false;
+      if (currentSession === this.connectionSessionId) {
+        this.isConnecting = false;
+      }
     }
   }
 
@@ -497,6 +529,7 @@ class BaseBLEDevice {
   }
 
   async disconnectBLE() {
+    this.connectionSessionId++; // Инвалидируем сессию
     this.isExplicitDisconnect = true;
     clearTimeout(this.reconnectTimer);
     clearTimeout(this.stableTimer);
@@ -526,6 +559,7 @@ class BaseBLEDevice {
         this._log(`Ошибка при отключении: ${e?.message || e}`, "warn");
       }
     }
+    this.connectedDeviceId = null;
     this.rxBuffer = "";
     this._setCurrentStep("IDLE");
     this.updateUI("disconnected");
@@ -540,7 +574,7 @@ class BaseBLEDevice {
     }, delayMs);
   }
 
-  // --- ПАРСИНГ ВХОДЯЩИХ ДАННЫХ ПО ЗАКРЫВАЮЩЕЙ СКОБКЕ '}' ---
+  // --- НАДЕЖНЫЙ ПАРСИНГ ВХОДЯЩИХ ДАННЫХ (Brace-Counting JSON Stream Parser) ---
   _parseData(result) {
     this._log(`[RX RAW] -> ${JSON.stringify(result)}`);
 
@@ -592,36 +626,94 @@ class BaseBLEDevice {
       }
 
       this.rxBuffer += chunk;
-      this._log(`[RX BUFFER] Текущая длина буфера: ${this.rxBuffer.length}, Буфер: "${this.rxBuffer}"`, "info");
 
+      // Защита от переполнения буфера с сохранением хвоста (последней незакрытой конструкции)
       if (this.rxBuffer.length > this.maxBufferSize) {
-        this._log("[RX ERROR] Буфер переполнен, сброс!", "warn");
-        this.rxBuffer = "";
+        this._log("[RX ERROR] Буфер переполнен, очистка с сохранением хвоста...", "warn");
+        const lastOpen = this.rxBuffer.lastIndexOf('{');
+        if (lastOpen !== -1 && this.rxBuffer.length - lastOpen < this.maxBufferSize / 2) {
+          this.rxBuffer = this.rxBuffer.substring(lastOpen);
+        } else {
+          this.rxBuffer = "";
+        }
         return;
       }
 
-      let idx;
       let parsedCount = 0;
-      while ((idx = this.rxBuffer.indexOf('}')) !== -1) {
-        const candidate = this.rxBuffer.substring(0, idx + 1).trim();
-        this.rxBuffer = this.rxBuffer.substring(idx + 1);
 
-        if (!candidate || !candidate.startsWith('{')) {
-          this._log(`[RX WARN] Пропущен некорректный кандидат JSON: "${candidate}"`, "warn");
-          continue;
+      // Итеративный поиск полноценных JSON-объектов методом подсчета фигурных скобок с учетом строковых литералов
+      while (true) {
+        const openIdx = this.rxBuffer.indexOf('{');
+        if (openIdx === -1) {
+          // Если открывающих скобок нет, сбрасываем мусор, если он слишком длинный
+          if (this.rxBuffer.length > 2048) this.rxBuffer = "";
+          break;
         }
+
+        if (openIdx > 0) {
+          this.rxBuffer = this.rxBuffer.substring(openIdx);
+        }
+
+        let depth = 0;
+        let inString = false;
+        let escape = false;
+        let closeIdx = -1;
+
+        for (let i = 0; i < this.rxBuffer.length; i++) {
+          const char = this.rxBuffer[i];
+          if (escape) {
+            escape = false;
+            continue;
+          }
+          if (char === '\\' && inString) {
+            escape = true;
+            continue;
+          }
+          if (char === '"') {
+            inString = !inString;
+            continue;
+          }
+          if (!inString) {
+            if (char === '{') {
+              depth++;
+            } else if (char === '}') {
+              depth--;
+              if (depth === 0) {
+                closeIdx = i;
+                break;
+              }
+            }
+          }
+        }
+
+        if (closeIdx === -1) {
+          // Полный JSON еще не пришел целиком, ждем следующие пакеты
+          break;
+        }
+
+        const candidate = this.rxBuffer.substring(0, closeIdx + 1);
+        this.rxBuffer = this.rxBuffer.substring(closeIdx + 1);
 
         try {
           const data = JSON.parse(candidate);
           parsedCount++;
-          this._log(`[RX JSON #${parsedCount}] Успешно распарсено: ${candidate}`);
+          this._log(`[RX JSON #${parsedCount}] Успешно распарсено`);
 
           if (data.counter !== undefined || data.cnt !== undefined) {
             this._log(`[COUNTER] Получено значение счётчика: ${data.counter ?? data.cnt}`, "info");
           }
 
-          if (data.sys) {
-            this.espFwVersion = typeof data.sys === 'object' ? data.sys.fw : data.sys;
+          if (data.version || data.fw || data.sys) {
+            if (data.version) {
+              this.espFwVersion = data.version;
+            } else if (data.fw) {
+              this.espFwVersion = data.fw;
+            } else if (data.sys) {
+              this.espFwVersion = typeof data.sys === 'object' 
+                ? (data.sys.fw || data.sys.version || JSON.stringify(data.sys)) 
+                : data.sys;
+            }
+            this._log(`[INFO] Версия прошивки получена: ${this.espFwVersion}`);
             this.updateEspFwUI();
           }
 
@@ -636,34 +728,48 @@ class BaseBLEDevice {
   }
 
   async _writeRaw(options) {
+    if (!this.BluetoothLe) throw new Error("Плагин BluetoothLe недоступен");
+
     if (typeof this.BluetoothLe.writeWithoutResponse === 'function') {
       try {
         await this.BluetoothLe.writeWithoutResponse(options);
         return true;
-      } catch (eNoResp) {}
+      } catch (eNoResp) {
+        this._log(`[TX WARN] writeWithoutResponse не удался, пробуем write: ${eNoResp?.message || eNoResp}`, "warn");
+      }
     }
     await this.BluetoothLe.write(options);
     return true;
   }
 
-  async _sendBytes(uint8Bytes) {
+  async _sendBytes(uint8Bytes, timeoutMs = 3000) {
     if (!this.connectedDeviceId || !this.BluetoothLe) {
       throw new Error("Устройство не подключено");
     }
 
-    // Плагин capacitor-community/bluetooth-le на Android ожидает строго HEX-строку
-    const hexVal = Array.from(uint8Bytes)
-      .map(b => b.toString(16).padStart(2, '0'))
-      .join('');
+    const dataView = new DataView(
+      uint8Bytes.buffer,
+      uint8Bytes.byteOffset,
+      uint8Bytes.byteLength
+    );
 
-    this._log(`[TX BYTES] Отправка ${uint8Bytes.length} байт (Hex)`);
-
-    await this._writeRaw({
+    const writePromise = this._writeRaw({
       deviceId: this.connectedDeviceId,
       service: this.serviceUuid,
       characteristic: this.rxUuid,
-      value: hexVal
+      value: dataView
     });
+
+    let timeoutId;
+    const timeoutPromise = new Promise((_, reject) => {
+      timeoutId = setTimeout(() => reject(new Error("Таймаут отправки чанка по BLE")), timeoutMs);
+    });
+
+    try {
+      await Promise.race([writePromise, timeoutPromise]);
+    } finally {
+      clearTimeout(timeoutId);
+    }
   }
   
   // --- ОТПРАВКА КОМАНД БЕЗ ДОБАВЛЕНИЯ \n ---
@@ -674,7 +780,7 @@ class BaseBLEDevice {
     try {
       this._log(`[TX CMD] Отправка команды: ${cmd}`);
       const bytes = new TextEncoder().encode(cmd);
-      await this._sendBytes(bytes);
+      await this._sendBytes(bytes, 3000);
     } catch (e) {
       this._log(`[TX ERROR] Ошибка отправки команды "${cmd}": ${e?.message || e}`, "error");
       throw e;
@@ -683,6 +789,8 @@ class BaseBLEDevice {
 
   async updateESP32Firmware(source = null) {
     if (!confirm("Начать прошивку ESP32 по BLE?")) return;
+
+    const sessionAtStart = this.connectionSessionId;
 
     try {
       this.isOtaInProgress = true;
@@ -705,6 +813,10 @@ class BaseBLEDevice {
         bytes = new Uint8Array(arrayBuffer);
       }
 
+      if (!this.isOtaInProgress || sessionAtStart !== this.connectionSessionId || !this.connectedDeviceId) {
+        throw new Error("Соединение прервано перед началом OTA");
+      }
+
       await this.sendCmd(JSON.stringify({ cmd: "OTA_START", size: bytes.length }));
       await this._delay(1000);
 
@@ -712,13 +824,17 @@ class BaseBLEDevice {
       const total = bytes.length;
 
       for (let offset = 0; offset < total; offset += chunkSize) {
-        const chunk = bytes.slice(offset, offset + chunkSize);
-        await this._sendBytes(chunk);
+        if (!this.isOtaInProgress || sessionAtStart !== this.connectionSessionId || !this.connectedDeviceId) {
+          throw new Error("Прошивка прервана: устройство отключено");
+        }
 
-        await this._delay(10);
+        const chunk = bytes.slice(offset, offset + chunkSize);
+        await this._sendBytes(chunk, 4000);
+
+        await this._delay(15);
 
         const percent = Math.round((offset / total) * 100);
-        if (offset % (chunkSize * 5) === 0) {
+        if (offset % (chunkSize * 5) === 0 || offset + chunkSize >= total) {
           if (typeof this.onOtaProgressCallback === 'function') {
             this.onOtaProgressCallback(percent);
           }
@@ -729,11 +845,9 @@ class BaseBLEDevice {
 
       await this._delay(200);
       
-      // Вычисляем CRC32 файла прошивки для проверки на ESP32
       const fileCrc = this._calculateCRC32(bytes);
       this._log(`[OTA] Вычислен CRC32 файла: 0x${fileCrc.toString(16)}`);
 
-      // Команда окончания OTA с передачей CRC32
       await this.sendCmd(JSON.stringify({ cmd: "OTA_END", crc: fileCrc }));
       
       alert("Прошивка успешно завершена! ESP32 перезагружается.");
