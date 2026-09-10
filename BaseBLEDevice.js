@@ -727,21 +727,37 @@ class BaseBLEDevice {
     }
   }
 
-  async _writeRaw(options) {
-    if (!this.BluetoothLe) throw new Error("Плагин BluetoothLe недоступен");
-
+  async _writeRaw(deviceId, service, characteristic, uint8Bytes) {
+    if (!this.BluetoothLe) throw new Error("Plugin BluetoothLe unavailable");
+  
+    // Функция для создания свежего DataView под каждую попытку
+    const createDataView = () => new DataView(
+      uint8Bytes.buffer.slice(uint8Bytes.byteOffset, uint8Bytes.byteOffset + uint8Bytes.byteLength)
+    );
+  
     if (typeof this.BluetoothLe.writeWithoutResponse === 'function') {
       try {
-        await this.BluetoothLe.writeWithoutResponse(options);
+        await this.BluetoothLe.writeWithoutResponse({
+          deviceId,
+          service,
+          characteristic,
+          value: createDataView()
+        });
         return true;
       } catch (eNoResp) {
         this._log(`[TX WARN] writeWithoutResponse не удался, пробуем write: ${eNoResp?.message || eNoResp}`, "warn");
       }
     }
-    await this.BluetoothLe.write(options);
+  
+    await this.BluetoothLe.write({
+      deviceId,
+      service,
+      characteristic,
+      value: createDataView()
+    });
     return true;
   }
-
+  
   async _sendBytes(uint8Bytes, timeoutMs = 3000) {
     if (!this.connectedDeviceId || !this.BluetoothLe) {
       throw new Error("Устройство не подключено");
