@@ -2,7 +2,9 @@ class MainApp extends BaseApp {
   constructor() {
     super({
       repoOwner: "johneagle200-ship-it",
-      repoName: "je-ble-template"
+      repoName: "je-ble-template",
+      // Привязываем метод класса к callback-событию, которое ждет BaseBLEDevice
+      onTelemetry: (data) => this.onTelemetry(data) 
     });
   }
 
