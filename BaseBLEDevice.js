@@ -260,7 +260,7 @@ class BaseBLEDevice {
     }
   }
 
-  async selectNewDevice() {
+async selectNewDevice() {
     if (this.isConnecting) return;
     await this.ensurePermissions();
 
@@ -269,7 +269,37 @@ class BaseBLEDevice {
       this.isConnecting = true;
       this.isExplicitDisconnect = true;
       clearTimeout(this.reconnectTimer);
+      clearTimeout(this.stableTimer);
       this.updateUI("connecting");
+
+      // Если уже есть активное подключение, разрываем его перед вызовом сканера
+      if (this.connectedDeviceId && this.BluetoothLe) {
+        this._log("[BLE] Смена устройства: закрытие текущей сессии...");
+        
+        if (this.valueListener) {
+          try {
+            await this.valueListener.remove();
+          } catch (e) {}
+          this.valueListener = null;
+        }
+
+        try {
+          await this.BluetoothLe.stopNotifications({
+            deviceId: this.connectedDeviceId,
+            service: this.serviceUuid,
+            characteristic: this.txUuid
+          }).catch(() => {});
+          
+          await this.BluetoothLe.disconnect({ deviceId: this.connectedDeviceId });
+        } catch (discErr) {
+          this._log(`[BLE] Ошибка при отключении старого устройства: ${discErr?.message || discErr}`, "warn");
+        }
+
+        this.connectedDeviceId = null;
+        this.rxBuffer = "";
+        // Пауза 500мс, чтобы Android успел освободить GATT-клиент в стеке
+        await this._delay(500);
+      }
 
       let result = null;
       try {
@@ -308,7 +338,7 @@ class BaseBLEDevice {
       this.updateUI("disconnected");
     }
   }
-
+  
   async connectNativeBLE(deviceId) {
     if (this.isConnecting || !deviceId) return;
 
