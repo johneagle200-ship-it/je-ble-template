@@ -729,31 +729,40 @@ class BaseBLEDevice {
 
   async _writeRaw(deviceId, service, characteristic, uint8Bytes) {
     if (!this.BluetoothLe) throw new Error("Plugin BluetoothLe unavailable");
-  
-    // Функция для создания свежего DataView под каждую попытку
-    const createDataView = () => new DataView(
-      uint8Bytes.buffer.slice(uint8Bytes.byteOffset, uint8Bytes.byteOffset + uint8Bytes.byteLength)
-    );
-  
+
+    // Безопасное преобразование Uint8Array в Base64 для передачи через мост Capacitor
+    const uint8ToBase64 = (bytes) => {
+      let binary = '';
+      const len = bytes.byteLength;
+      const chunkSize = 0x8000; // Пачками по 32KB во избежание переполнения стека
+      for (let i = 0; i < len; i += chunkSize) {
+        const chunk = bytes.subarray(i, i + chunkSize);
+        binary += String.fromCharCode.apply(null, chunk);
+      }
+      return btoa(binary);
+    };
+
+    const base64Value = uint8ToBase64(uint8Bytes);
+
     if (typeof this.BluetoothLe.writeWithoutResponse === 'function') {
       try {
         await this.BluetoothLe.writeWithoutResponse({
           deviceId,
           service,
           characteristic,
-          value: createDataView()
+          value: base64Value
         });
         return true;
       } catch (eNoResp) {
         this._log(`[TX WARN] writeWithoutResponse не удался, пробуем write: ${eNoResp?.message || eNoResp}`, "warn");
       }
     }
-  
+
     await this.BluetoothLe.write({
       deviceId,
       service,
       characteristic,
-      value: createDataView()
+      value: base64Value
     });
     return true;
   }
