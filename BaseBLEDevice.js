@@ -650,65 +650,22 @@ class BaseBLEDevice {
     if (!this.connectedDeviceId || !this.BluetoothLe) {
       throw new Error("Устройство не подключено");
     }
-
-    this._log(`[TX BYTES] Отправка ${uint8Bytes.length} байт`);
-
-    const uint8ToHex = (bytes) => Array.from(bytes).map(b => b.toString(16).padStart(2, '0')).join('');
-    const uint8ToBase64 = (bytes) => {
-      let binary = "";
-      for (let i = 0; i < bytes.byteLength; i++) {
-        binary += String.fromCharCode(bytes[i]);
-      }
-      return window.btoa(binary);
-    };
-
-    const getVariant = (type) => {
-      if (type === 'hex') return uint8ToHex(uint8Bytes);
-      if (type === 'base64') return uint8ToBase64(uint8Bytes);
-      if (type === 'dataview') return new DataView(uint8Bytes.buffer, uint8Bytes.byteOffset, uint8Bytes.byteLength);
-      if (type === 'array') return Array.from(uint8Bytes);
-      return null;
-    };
-
-    if (this.preferredWriteFormat) {
-      try {
-        await this._writeRaw({
-          deviceId: this.connectedDeviceId,
-          service: this.serviceUuid,
-          characteristic: this.rxUuid,
-          value: getVariant(this.preferredWriteFormat)
-        });
-        this._log(`[TX OK] Успешно отправлено в формате: ${this.preferredWriteFormat}`);
-        return;
-      } catch (e) {
-        this._log(`[TX WARN] Формат ${this.preferredWriteFormat} не сработал, перебираем...`, "warn");
-        this.preferredWriteFormat = null;
-      }
+  
+    // Конвертируем сразу в base64 — это самый надежный формат для Capacitor BLE бэкэнда
+    let binary = "";
+    for (let i = 0; i < uint8Bytes.byteLength; i++) {
+      binary += String.fromCharCode(uint8Bytes[i]);
     }
-
-    const formats = ['hex', 'base64', 'dataview', 'array'];
-    let lastErr = null;
-
-    for (const fmt of formats) {
-      try {
-        const val = getVariant(fmt);
-        if (!val) continue;
-
-        await this._writeRaw({
-          deviceId: this.connectedDeviceId,
-          service: this.serviceUuid,
-          characteristic: this.rxUuid,
-          value: val
-        });
-        this.preferredWriteFormat = fmt;
-        this._log(`[TX OK] Успешно отправлено в формате: ${fmt}`);
-        return;
-      } catch (err) {
-        lastErr = err;
-      }
-    }
-
-    throw lastErr || new Error("Все форматы записи отклонены плагином");
+    const base64Val = window.btoa(binary);
+  
+    this._log(`[TX BYTES] Отправка ${uint8Bytes.length} байт (Base64)`);
+  
+    await this._writeRaw({
+      deviceId: this.connectedDeviceId,
+      service: this.serviceUuid,
+      characteristic: this.rxUuid,
+      value: base64Val
+    });
   }
   
   // --- ОТПРАВКА КОМАНД БЕЗ ДОБАВЛЕНИЯ \n ---
