@@ -260,7 +260,7 @@ class BaseBLEDevice {
     }
   }
 
-async selectNewDevice() {
+  async selectNewDevice() {
     if (this.isConnecting) return;
     await this.ensurePermissions();
 
@@ -270,9 +270,11 @@ async selectNewDevice() {
       this.isExplicitDisconnect = true;
       clearTimeout(this.reconnectTimer);
       clearTimeout(this.stableTimer);
-      this.updateUI("connecting");
+      
+      // Сразу включаем индикацию загрузки (спиннер / песочные часики)
+      this.updateUI("switching");
 
-      // Если уже есть активное подключение, разрываем его перед вызовом сканера
+      // Если уже есть активное подключение, разрываем его
       if (this.connectedDeviceId && this.BluetoothLe) {
         this._log("[BLE] Смена устройства: закрытие текущей сессии...");
         
@@ -297,8 +299,7 @@ async selectNewDevice() {
 
         this.connectedDeviceId = null;
         this.rxBuffer = "";
-        // Пауза 500мс, чтобы Android успел освободить GATT-клиент в стеке
-        await this._delay(500);
+        await this._delay(500); // Пауза для освобождения радиомодуля ОС
       }
 
       let result = null;
@@ -781,9 +782,12 @@ async selectNewDevice() {
       this._setElementClass('bleStatus', 'status connected');
       this._setElementStyle('bottomConnectBar', 'display', 'none');
       this._setElementStyle('btnDisconnect', 'display', 'block');
-    } else if (state === "connecting" || state === "reconnecting") {
-      textState = state === "connecting" ? "Подключение..." : "Поиск...";
-      this._setElementClass('bleStatus', 'status pending');
+    } else if (state === "connecting" || state === "reconnecting" || state === "switching") {
+      if (state === "switching") textState = "Поиск устройств...";
+      else textState = state === "connecting" ? "Подключение..." : "Поиск...";
+      
+      // Добавляем класс с анимацией вращения (спиннер)
+      this._setElementClass('bleStatus', 'status pending spinner-active');
       this._setElementStyle('bottomConnectBar', 'display', 'none');
       this._setElementStyle('btnDisconnect', 'display', 'block');
     } else if (state === "ota_start") {
@@ -808,7 +812,6 @@ async selectNewDevice() {
       this.onStatusChangeCallback(state, textState);
     }
   }
-
   _setElementText(id, text) {
     const el = document.getElementById(id);
     if (el) el.innerText = text;
