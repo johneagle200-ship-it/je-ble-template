@@ -268,6 +268,13 @@
       <div style="color: #aaa; font-size: 14px;">Счётчик:</div>
       <div id="telemetryData" class="val">0</div>
     </div>
+
+    <div class="card" style="padding: 12px 18px;">
+      <div style="display: flex; justify-content: space-between; align-items: center; font-size: 14px; color: #aaa;">
+        <span>Аптайм:</span>
+        <span id="uptimeData" style="font-weight: bold; color: #fff; font-size: 16px;">-- с</span>
+      </div>
+    </div>
   </main>
 
   <div id="bottomConnectBar" class="bottom-bar">
@@ -335,7 +342,6 @@
       }
     }
 
-    // Автоматическая подстановка версии из AppUpdater или дефолтного значения
     window.addEventListener('DOMContentLoaded', () => {
       const currentVer = (window.AppUpdater && window.AppUpdater.VERSION) ? window.AppUpdater.VERSION : 'v1.0.0';
       const verHeader = document.getElementById('appVersionHeader');
