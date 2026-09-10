@@ -329,89 +329,91 @@ class BaseBLEDevice {
   
   async connectNativeBLE(deviceId) {
     if (!deviceId || !this.BluetoothLe || this.isConnecting) return;
-
+  
     await this.ensurePermissions();
     const currentSession = ++this.connectionSessionId;
-
+    const isAborted = () => currentSession !== this.connectionSessionId;
+  
     try {
       this.isConnecting = true;
       clearTimeout(this.reconnectTimer);
       clearTimeout(this.stableTimer);
-
+  
       localStorage.setItem("ble_crash_pending", "1");
       this.updateUI("connecting");
       this.rxBuffer = "";
       this.streamDecoder = new TextDecoder('utf-8', { fatal: false });
       this.currentMtu = 23;
-
+  
+      // 1. Подключение по GATT
       this._setCurrentStep("GATT_CONNECTING");
       await this.BluetoothLe.connect({ deviceId, timeout: 12000 });
-      if (currentSession !== this.connectionSessionId) return;
-
+      if (isAborted()) return;
+  
+      // 2. Пауза для стабилизации GATT-стека Android
       this._setCurrentStep("GATT_STABILIZING");
-      await this._delay(1000);
-      if (currentSession !== this.connectionSessionId) return;
-
-      this._setCurrentStep("DISCOVER_SERVICES");
-      try { await this.BluetoothLe.getServices({ deviceId }); } catch (servErr) {}
-      if (currentSession !== this.connectionSessionId) return;
       await this._delay(600);
-
+      if (isAborted()) return;
+  
+      // 3. Поиск сервисов
+      this._setCurrentStep("DISCOVER_SERVICES");
+      try { 
+        await this.BluetoothLe.getServices({ deviceId }); 
+      } catch (servErr) {
+        console.warn("getServices warning:", servErr);
+      }
+      if (isAborted()) return;
+      await this._delay(300);
+  
+      // 4. Запрос увеличенного MTU
       this._setCurrentStep("REQUEST_MTU");
       if (typeof this.BluetoothLe.requestMtu === 'function') {
         try {
           const mtuRes = await this.BluetoothLe.requestMtu({ deviceId, mtu: 247 });
-          if (mtuRes && mtuRes.mtu) this.currentMtu = mtuRes.mtu;
-        } catch (mtuErr) {}
-        if (currentSession !== this.connectionSessionId) return;
-        await this._delay(600);
+          if (mtuRes?.mtu) this.currentMtu = mtuRes.mtu;
+        } catch (mtuErr) {
+          console.warn("requestMtu warning:", mtuErr);
+        }
+        if (isAborted()) return;
+        await this._delay(300);
       }
-
+  
+      // 5. Подписка на уведомления TX-характеристики
       this._setCurrentStep("START_NOTIFICATIONS_EXEC");
-      if (this.valueListener) {
-        try { await this.valueListener.remove(); } catch (e) {}
-        this.valueListener = null;
-      }
-      if (currentSession !== this.connectionSessionId) return;
-
+      const notifOptions = {
+        deviceId,
+        service: this.serviceUuid,
+        characteristic: this.txUuid
+      };
+      
+      // Callback передаётся 2-м аргументом в startNotifications
+      const onDataReceived = (result) => {
+        if (currentSession === this.connectionSessionId) {
+          this._parseData(result);
+        }
+      };
+  
       try {
-        this.valueListener = await this.BluetoothLe.addListener(
-          'characteristicValueReceived',
-          (result) => this._parseData(result)
-        );
-      } catch (listenErr) {}
-
-      if (currentSession !== this.connectionSessionId) return;
-      await this._delay(500);
-
-      try {
-        await this.BluetoothLe.startNotifications({
-          deviceId,
-          service: this.serviceUuid,
-          characteristic: this.txUuid
-        });
+        await this.BluetoothLe.startNotifications(notifOptions, onDataReceived);
       } catch (notifErr) {
-        await this._delay(800);
-        if (currentSession !== this.connectionSessionId) return;
-        await this.BluetoothLe.startNotifications({
-          deviceId,
-          service: this.serviceUuid,
-          characteristic: this.txUuid
-        });
+        await this._delay(600);
+        if (isAborted()) return;
+        await this.BluetoothLe.startNotifications(notifOptions, onDataReceived);
       }
-
-      if (currentSession !== this.connectionSessionId) return;
-      await this._delay(1200);
-
+  
+      if (isAborted()) return;
+      await this._delay(400);
+  
+      // 6. Переход в подключенный статус и Handshake
       this._setCurrentStep("CONNECTED_WAITING_STABILITY");
       this.updateUI("connected");
-
-      await this._delay(800);
-      if (currentSession !== this.connectionSessionId) return;
-
+  
+      await this._delay(400);
+      if (isAborted()) return;
+  
       await this._safeSendHandshake();
       this._setCurrentStep("OPERATIONAL_PENDING_GUARD");
-
+  
       this.stableTimer = setTimeout(() => {
         if (this.connectedDeviceId && !this.isConnecting && currentSession === this.connectionSessionId) {
           localStorage.removeItem("ble_crash_pending");
@@ -419,8 +421,9 @@ class BaseBLEDevice {
           this._setCurrentStep("STABLE_OPERATIONAL");
         }
       }, this.minStableSessionMs);
-
+  
     } catch (err) {
+      console.error("BLE connect error:", err);
       if (currentSession === this.connectionSessionId) {
         this.updateUI("disconnected");
       }
