@@ -24,7 +24,7 @@ class BaseBLEDevice {
     // Сторожевой таймер (Watchdog) для контроля зависания связи
     this.watchdogTimer = null;
     this.lastRxTimestamp = 0;
-    this.watchdogIntervalMs = config.watchdogIntervalMs || 12000;
+    this.watchdogIntervalMs = config.watchdogIntervalMs || 2000;//12000;
     this.isWatchdogArmed = false;
 
     this.connectionSessionId = 0;
