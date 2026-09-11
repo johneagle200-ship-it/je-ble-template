@@ -375,7 +375,7 @@
       if (verMenu) verMenu.textContent = currentVer;
     });
 
-    // Логика визуального JSON-лога (TX/RX)
+    // Вспомогательные функции выводного JSON-лога (вызываются из BaseBLEDevice)
     function appendJsonLog(direction, jsonStr) {
       const logContainer = document.getElementById('jsonPacketLog');
       if (!logContainer) return;
@@ -402,37 +402,6 @@
     function escapeHtml(str) {
       return str.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
     }
-
-    // Перехват отправки и получения JSON через объект app.ble
-    window.addEventListener('DOMContentLoaded', () => {
-      const checkInterval = setInterval(() => {
-        if (window.app && window.app.ble) {
-          clearInterval(checkInterval);
-          
-          // Хук на отправку (TX)
-          const ble = window.app.ble;
-          if (typeof ble.sendJson === 'function') {
-            const originalSendJson = ble.sendJson.bind(ble);
-            ble.sendJson = function(doc) {
-              try {
-                const jsonStr = typeof doc === 'string' ? doc : JSON.stringify(doc);
-                appendJsonLog('TX', jsonStr);
-              } catch (e) {}
-              return originalSendJson(doc);
-            };
-          }
-
-          // Хук на прием телеметрии (RX)
-          const originalTelemetry = window.app.onTelemetry ? window.app.onTelemetry.bind(window.app) : null;
-          window.app.onTelemetry = function(data) {
-            try {
-              appendJsonLog('RX', JSON.stringify(data));
-            } catch (e) {}
-            if (originalTelemetry) originalTelemetry(data);
-          };
-        }
-      }, 200);
-    });
   </script>
 
   <script src="AppUpdater.js"></script>
