@@ -1,13 +1,16 @@
 class BaseBLEDevice {
   constructor(config = {}) {
+    // Настройка репозитория для OTA-обновлений по умолчанию
     this.repoOwner = config.repoOwner || "johneagle200-ship-it";
     this.repoName = config.repoName || "je-ble-template";
     
+    // BLE UUID (сервис и характеристики Nordic UART Service по умолчанию)
     this.serviceUuid = (config.serviceUuid || "6e400001-b5a3-f393-e0a9-e50e24dcca9e").toLowerCase();
     this.rxUuid = (config.rxUuid || "6e400002-b5a3-f393-e0a9-e50e24dcca9e").toLowerCase();
     this.txUuid = (config.txUuid || "6e400003-b5a3-f393-e0a9-e50e24dcca9e").toLowerCase();
     this.namePrefix = config.namePrefix || "JE_";
 
+    // Флаги состояния и автоподключения
     this.autoConnect = config.autoConnect !== undefined ? config.autoConnect : true;
     this.autoConnectBlocked = false;
     this.espFwVersion = null;
@@ -19,7 +22,7 @@ class BaseBLEDevice {
     this.isOtaInProgress = false;
 
     this.connectionSessionId = 0;
-    this._writeQueue = Promise.resolve();
+    this._writeQueue = Promise.resolve(); // Очередь последовательной записи для предотвращения коллизий
 
     this.minStableSessionMs = config.minStableSessionMs || 5000;
     this.stableTimer = null;
@@ -27,6 +30,7 @@ class BaseBLEDevice {
 
     this.hasPermissions = false;
 
+    // Буферы и декодер для входящего потока данных
     this.rxBuffer = "";
     this.streamDecoder = new TextDecoder('utf-8', { fatal: false });
     this.maxBufferSize = config.maxBufferSize || 16384;
@@ -34,10 +38,12 @@ class BaseBLEDevice {
 
     this.preferredWriteFormat = null; 
 
+    // Слушатели и плагин Capacitor BluetoothLe
     this.valueListener = null;
     this.disconnectListener = null;
     this.BluetoothLe = window.Capacitor?.Plugins?.BluetoothLe || (typeof Capacitor !== 'undefined' ? Capacitor.Plugins.BluetoothLe : null);
 
+    // Коллбэки приложения
     this.onTelemetryCallback = config.onTelemetry || null;
     this.onStatusChangeCallback = config.onStatusChange || null;
     this.onOtaProgressCallback = config.onOtaProgress || null;
@@ -45,10 +51,12 @@ class BaseBLEDevice {
     this._log("[JE Core] Модуль BaseBLEDevice инициализирован.");
   }
 
+  // Вспомогательная функция задержки (миллисекунды)
   _delay(ms) {
     return new Promise((resolve) => setTimeout(resolve, ms));
   }
 
+  // Генерация CRC32 таблицы для проверки целостности прошивки
   _getCrcTable() {
     if (this._crcTable) return this._crcTable;
     let table = new Uint32Array(256);
@@ -63,6 +71,7 @@ class BaseBLEDevice {
     return table;
   }
 
+  // Расчет CRC32 для массива байт
   _calculateCRC32(bytes) {
     let c = ~0;
     const table = this._getCrcTable();
@@ -72,6 +81,7 @@ class BaseBLEDevice {
     return ~c >>> 0;
   }
 
+  // Логирование с сохранением в localStorage для отладки сбоев
   _log(msg, level = "info") {
     const timestamp = new Date().toLocaleTimeString();
     const formatted = `[${timestamp}] [${level.toUpperCase()}] ${msg}`;
@@ -83,7 +93,7 @@ class BaseBLEDevice {
     try {
       const logs = JSON.parse(localStorage.getItem("ble_debug_logs") || "[]");
       logs.push(formatted);
-      if (logs.length > 100) logs.shift();
+      if (logs.length > 100) logs.shift(); // Ограничение размера истории
       localStorage.setItem("ble_debug_logs", JSON.stringify(logs));
     } catch (e) {}
   }
@@ -101,6 +111,7 @@ class BaseBLEDevice {
     this._log("[JE Core] Журнал логов очищен.");
   }
 
+  // Отображение модального окна с логами при возникновении критического сбоя (Crash Guard)
   showLogsModal() {
     const modal = document.getElementById("crash-guard-modal");
     if (!modal) return;
@@ -156,21 +167,25 @@ class BaseBLEDevice {
     modal.style.display = "flex";
   }
 
+  // Фиксация текущего шага подключения (для отслеживания зависаний)
   _setCurrentStep(stepName) {
     this.currentStep = stepName;
     localStorage.setItem("ble_last_step", stepName);
     this._log(`[STEP] -> ${stepName}`);
   }
 
+  // Сброс защитной блокировки цикла перезагрузок
   resetCrashLock() {
     localStorage.removeItem("ble_crash_pending");
     this.autoConnectBlocked = false;
     this._log("[Crash Guard] Блокировка сбоя сброшена вручную.");
   }
 
+  // Инициализация менеджера BLE и проверка разрешений
   async init() {
     this._log("[JE Core] Запуск процесса инициализации BLE...");
 
+    // Проверка признака аварийного завершения в прошлом сеансе
     const crashPending = localStorage.getItem("ble_crash_pending");
     if (crashPending === "1") {
       this.autoConnectBlocked = true;
@@ -183,6 +198,7 @@ class BaseBLEDevice {
       try { await this.BluetoothLe.initialize(); } catch (initErr) {}
       await this.ensurePermissions();
 
+      // Регистрация глобального слушателя отключения устройства
       if (!this.disconnectListener) {
         try {
           this.disconnectListener = await this.BluetoothLe.addListener('disconnected', (info) => {
@@ -190,6 +206,7 @@ class BaseBLEDevice {
             this.isConnecting = false;
             clearTimeout(this.stableTimer);
 
+            // Автоматический реконнект, если отключение было непредвиденным
             if (!this.isExplicitDisconnect && this.connectedDeviceId && !this.autoConnectBlocked) {
               this.updateUI("reconnecting");
               this.scheduleReconnect(3000);
@@ -203,6 +220,7 @@ class BaseBLEDevice {
       const savedName = localStorage.getItem("savedDeviceName");
       if (savedName) this._setElementText('deviceName', savedName);
 
+      // Автоподключение к последнему известному устройству
       if (this.autoConnect && !this.autoConnectBlocked) {
         const savedId = localStorage.getItem("savedDeviceId");
         if (savedId) {
@@ -216,6 +234,7 @@ class BaseBLEDevice {
     } catch (e) {}
   }
 
+  // Запрос необходимых разрешений Bluetooth у ОС (Android/iOS)
   async ensurePermissions() {
     if (this.hasPermissions) return;
     try {
@@ -236,12 +255,13 @@ class BaseBLEDevice {
     }
   }
 
+  // Обновление UI версии прошивки ESP32
   updateEspFwUI() {
     const versionStr = `${this.espFwVersion || '--'}`;
-    // Используем корректный идентификатор из index_3.html
     this._setElementText('espFwText', versionStr);
   }
 
+  // Ручной запуск подключения или повторного поиска
   async connectOrReconnect() {
     this.resetCrashLock();
     this.isExplicitDisconnect = false;
@@ -253,6 +273,7 @@ class BaseBLEDevice {
     }
   }
 
+  // Поиск и выбор нового BLE-устройства через системный диалог
   async selectNewDevice() {
     if (this.isConnecting) return;
     await this.ensurePermissions();
@@ -268,6 +289,7 @@ class BaseBLEDevice {
       
       this.updateUI("switching");
 
+      // Корректное отключение от текущего устройства перед выбором нового
       if (this.connectedDeviceId && this.BluetoothLe) {
         if (this.valueListener) {
           try { await this.valueListener.remove(); } catch (e) {}
@@ -310,6 +332,7 @@ class BaseBLEDevice {
         const deviceName = result.name || result.localName || result.deviceId;
         this.connectedDeviceId = result.deviceId;
 
+        // Сохранение данных выбранного устройства
         localStorage.setItem("savedDeviceId", result.deviceId);
         localStorage.setItem("savedDeviceName", deviceName);
         this._setElementText('deviceName', deviceName);
@@ -327,6 +350,7 @@ class BaseBLEDevice {
     }
   }
   
+  // Основной метод подключения к устройству и инициализации GATT-соединения
   async connectNativeBLE(deviceId) {
     if (!deviceId || !this.BluetoothLe || this.isConnecting) return;
   
@@ -339,6 +363,7 @@ class BaseBLEDevice {
       clearTimeout(this.reconnectTimer);
       clearTimeout(this.stableTimer);
   
+      // Установка флага ожидания стабильности (для отлова потенциальных крэшей)
       localStorage.setItem("ble_crash_pending", "1");
       this.updateUI("connecting");
       this.rxBuffer = "";
@@ -365,7 +390,7 @@ class BaseBLEDevice {
       if (isAborted()) return;
       await this._delay(300);
   
-      // 4. Запрос увеличенного MTU
+      // 4. Запрос увеличенного MTU для оптимизации передачи данных
       this._setCurrentStep("REQUEST_MTU");
       if (typeof this.BluetoothLe.requestMtu === 'function') {
         try {
@@ -378,7 +403,7 @@ class BaseBLEDevice {
         await this._delay(300);
       }
   
-      // 5. Подписка на уведомления TX-характеристики
+      // 5. Подписка на уведомления TX-характеристики (прием данных от ESP32)
       this._setCurrentStep("START_NOTIFICATIONS_EXEC");
       const notifOptions = {
         deviceId,
@@ -386,7 +411,6 @@ class BaseBLEDevice {
         characteristic: this.txUuid
       };
       
-      // Callback передаётся 2-м аргументом в startNotifications
       const onDataReceived = (result) => {
         if (currentSession === this.connectionSessionId) {
           this._parseData(result);
@@ -404,7 +428,7 @@ class BaseBLEDevice {
       if (isAborted()) return;
       await this._delay(400);
   
-      // 6. Переход в подключенный статус и Handshake
+      // 6. Переход в подключенный статус и отправка Handshake
       this._setCurrentStep("CONNECTED_WAITING_STABILITY");
       this.updateUI("connected");
   
@@ -414,6 +438,7 @@ class BaseBLEDevice {
       await this._safeSendHandshake();
       this._setCurrentStep("OPERATIONAL_PENDING_GUARD");
   
+      // Таймер подтверждения стабильности сеанса (сброс флага крэша при успешной работе)
       this.stableTimer = setTimeout(() => {
         if (this.connectedDeviceId && !this.isConnecting && currentSession === this.connectionSessionId) {
           localStorage.removeItem("ble_crash_pending");
@@ -434,6 +459,7 @@ class BaseBLEDevice {
     }
   }
   
+  // Отправка начальной команды запроса системной информации (Handshake)
   async _safeSendHandshake() {
     this._setCurrentStep("SEND_GET_SYS");
     try {
@@ -445,6 +471,7 @@ class BaseBLEDevice {
     } catch (cmdErr) {}
   }
 
+  // Полное отключение от BLE-устройства
   async disconnectBLE() {
     this.connectionSessionId++; 
     this.isExplicitDisconnect = true;
@@ -476,6 +503,7 @@ class BaseBLEDevice {
     this.updateUI("disconnected");
   }
 
+  // Планировщик автоматического переподключения при обрыве связи
   scheduleReconnect(delayMs) {
     clearTimeout(this.reconnectTimer);
     this.reconnectTimer = setTimeout(() => {
@@ -485,6 +513,7 @@ class BaseBLEDevice {
     }, delayMs);
   }
 
+  // Парсинг входящего потока байтов и сборка JSON-сообщений
   _parseData(result) {
     if (this.isOtaInProgress || !result) return;
 
@@ -493,6 +522,7 @@ class BaseBLEDevice {
       if (rawVal === undefined || rawVal === null) return;
 
       let bytes;
+      // Универсальное приведение различных форматов входящих данных к Uint8Array
       if (rawVal instanceof Uint8Array) {
         bytes = rawVal;
       } else if (rawVal instanceof DataView) {
@@ -521,6 +551,7 @@ class BaseBLEDevice {
         return;
       }
 
+      // Декодирование текста из потока байтов
       let chunk = "";
       try {
         chunk = this.streamDecoder.decode(bytes, { stream: true });
@@ -530,12 +561,14 @@ class BaseBLEDevice {
       }
 
       this.rxBuffer += chunk;
+      // Защита от переполнения буфера
       if (this.rxBuffer.length > this.maxBufferSize) {
         const lastOpen = this.rxBuffer.lastIndexOf('{');
         this.rxBuffer = (lastOpen !== -1) ? this.rxBuffer.substring(lastOpen) : "";
         return;
       }
 
+      // Выделение полных JSON-объектов по балансу фигурных скобок
       while (true) {
         const openIdx = this.rxBuffer.indexOf('{');
         if (openIdx === -1) {
@@ -567,7 +600,7 @@ class BaseBLEDevice {
         try {
           const data = JSON.parse(candidate);
 
-          // Проверка получения версии прошивки (поддерживаем version, fw, sys)
+          // Автоматическое определение версии прошивки из системных ответов
           if (data.version || data.fw || data.sys) {
             if (data.version) {
               this.espFwVersion = data.version;
@@ -581,19 +614,21 @@ class BaseBLEDevice {
             this.updateEspFwUI();
           }
 
-          // Передаем распарсенный объект в кастомный обработчик приложения (MainApp)
+          // Передача распарсенного объекта в обработчик телеметрии
           this.onTelemetry(data);
         } catch (e) {}
       }
     } catch (e) {}
   }
 
+  // Низкоуровневая запись сырых байт в RX-характеристику ESP32
   async _writeRaw(deviceId, service, characteristic, uint8Bytes) {
     const uint8ToHex = (bytes) => Array.from(bytes).map(b => b.toString(16).padStart(2, '0')).join(' ');
     await this.BluetoothLe.write({ deviceId, service, characteristic, value: uint8ToHex(uint8Bytes) });
     return true;
   }  
   
+  // Очередь отправки байт с таймаутом
   async _sendBytes(uint8Bytes, timeoutMs = 3000) {
     if (!this.connectedDeviceId || !this.BluetoothLe) throw new Error("Устройство не подключено");
 
@@ -613,12 +648,14 @@ class BaseBLEDevice {
     return this._writeQueue;
   }
   
+  // Отправка текстовой команды (строки) на устройство
   async sendCmd(cmd) {
     if (!this.connectedDeviceId || !this.BluetoothLe) throw new Error("Устройство не подключено");
     const bytes = new TextEncoder().encode(cmd);
     await this._sendBytes(bytes, 3000);
   }
 
+  // Процедура беспроводного обновления прошивки ESP32 (OTA) по BLE
   async updateESP32Firmware(source = null) {
     if (!confirm("Начать прошивку ESP32 по BLE?")) return;
     const sessionAtStart = this.connectionSessionId;
@@ -628,6 +665,7 @@ class BaseBLEDevice {
       this.updateUI("ota_start");
 
       let bytes;
+      // Получение бинарного файла прошивки из источника или GitHub репозитория
       if (source instanceof Uint8Array) {
         bytes = source;
       } else if (source instanceof ArrayBuffer) {
@@ -646,12 +684,14 @@ class BaseBLEDevice {
         throw new Error("Соединение прервано");
       }
 
+      // Инициализация OTA на стороне ESP32
       await this.sendCmd(JSON.stringify({ cmd: "OTA_START", size: bytes.length }));
       await this._delay(1000);
 
       const chunkSize = Math.min(244, Math.max(20, (this.currentMtu || 23) - 3));
       const total = bytes.length;
 
+      // Побайтовая отправка прошивки чанками
       for (let offset = 0; offset < total; offset += chunkSize) {
         if (!this.isOtaInProgress || sessionAtStart !== this.connectionSessionId || !this.connectedDeviceId) {
           throw new Error("Прошивка прервана");
@@ -668,6 +708,7 @@ class BaseBLEDevice {
 
       await this._delay(200);
       const fileCrc = this._calculateCRC32(bytes);
+      // Завершение OTA и передача контрольной суммы CRC32
       await this.sendCmd(JSON.stringify({ cmd: "OTA_END", crc: fileCrc }));
       
       alert("Прошивка успешно завершена! ESP32 перезагружается.");
@@ -680,12 +721,14 @@ class BaseBLEDevice {
     }
   }
 
+  // Обработчик входящей телеметрии
   onTelemetry(data) {
     if (typeof this.onTelemetryCallback === 'function') {
       this.onTelemetryCallback(data);
     }
   }
 
+  // Обновление интерфейса приложения в зависимости от статуса подключения
   updateUI(state) {
     let textState = "Отключено";
 
@@ -722,6 +765,7 @@ class BaseBLEDevice {
     }
   }
 
+  // Вспомогательные методы работы с DOM элементами
   _setElementText(id, text) {
     const el = document.getElementById(id);
     if (el) el.innerText = text;
