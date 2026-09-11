@@ -595,7 +595,7 @@ class BaseBLEDevice {
         this.updateEspFwUI();
       }
 
-      this._setElementText('telemetryData', JSON.stringify(telemetryData, null, 2));
+      //this._setElementText('telemetryData', JSON.stringify(telemetryData, null, 2));
 
       this.onTelemetry(telemetryData);
     } catch (e) {
