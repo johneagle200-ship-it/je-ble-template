@@ -4,13 +4,13 @@ class BaseBLEDevice {
     this.repoOwner = config.repoOwner || "johneagle200-ship-it";
     this.repoName = config.repoName || "je-ble-template";
     
-    // BLE UUID (сервис и характеристики Nordic UART Service по умолчанию)
+    // BLE UUID (Nordic UART Service по умолчанию)
     this.serviceUuid = (config.serviceUuid || "6e400001-b5a3-f393-e0a9-e50e24dcca9e").toLowerCase();
     this.rxUuid = (config.rxUuid || "6e400002-b5a3-f393-e0a9-e50e24dcca9e").toLowerCase();
     this.txUuid = (config.txUuid || "6e400003-b5a3-f393-e0a9-e50e24dcca9e").toLowerCase();
     this.namePrefix = config.namePrefix || "JE_";
 
-    // Флаги состояния и автопод подключения
+    // Флаги состояния и автоподключения
     this.autoConnect = config.autoConnect !== undefined ? config.autoConnect : true;
     this.autoConnectBlocked = false;
     this.espFwVersion = null;
@@ -35,8 +35,6 @@ class BaseBLEDevice {
     this.streamDecoder = new TextDecoder('utf-8', { fatal: false });
     this.maxBufferSize = config.maxBufferSize || 16384;
     this.currentMtu = 23;
-
-    this.preferredWriteFormat = null; 
 
     // Слушатели и плагин Capacitor BluetoothLe
     this.valueListener = null;
@@ -144,7 +142,7 @@ class BaseBLEDevice {
       };
     }
 
-    const btnClear = document.getElementById("btnCrashClear");
+    const btnClear = document.getElementById("btnClearLogs") || document.getElementById("btnCrashClear");
     if (btnClear) {
       btnClear.onclick = () => {
         this.clearDebugLogs();
@@ -171,7 +169,7 @@ class BaseBLEDevice {
   resetCrashLock() {
     localStorage.removeItem("ble_crash_pending");
     this.autoConnectBlocked = false;
-    this._log("[Crash Guard] Блокировка сбоя сброшена вручную.");
+    this._log("[Crash Guard] Блокировка сбоя сброшена.");
   }
 
   async init() {
@@ -392,13 +390,11 @@ class BaseBLEDevice {
         }
       };
 
-      // Очищаем старый слушатель, если остался
       if (this.valueListener) {
         try { await this.valueListener.remove(); } catch (e) {}
         this.valueListener = null;
       }
   
-      // Подписываемся на событие valueChange и активируем нотификации в Capacitor BLE
       try {
         this.valueListener = await this.BluetoothLe.addListener('valueChange', onDataReceived);
         await this.BluetoothLe.startNotifications(notifOptions);
@@ -412,14 +408,16 @@ class BaseBLEDevice {
       }
   
       if (isAborted()) return;
-      await this._delay(400);
+
+      // Пауза 500мс для гарантированной записи в CCCD (0x2902) на стороне ESP32
+      this._setCurrentStep("SUBSCRIBING_CCCD_WAIT");
+      await this._delay(500);
+      if (isAborted()) return;
   
       this._setCurrentStep("CONNECTED_WAITING_STABILITY");
       this.updateUI("connected");
   
-      await this._delay(400);
-      if (isAborted()) return;
-  
+      // Отправка рукопожатия "get_sys"
       await this._safeSendHandshake();
       this._setCurrentStep("OPERATIONAL_PENDING_GUARD");
   
@@ -446,9 +444,8 @@ class BaseBLEDevice {
   async _safeSendHandshake() {
     this._setCurrentStep("SEND_GET_SYS");
     try {
-      const payload = JSON.stringify({ cmd: "get_sys" });
       await Promise.race([
-        this.sendCmd(payload),
+        this.sendJson({ cmd: "get_sys" }),
         new Promise((_, reject) => setTimeout(() => reject(new Error("Таймаут get_sys")), 3000))
       ]);
     } catch (cmdErr) {}
@@ -494,11 +491,9 @@ class BaseBLEDevice {
     }, delayMs);
   }
 
-  // Парсинг входящего потока байтов и сборка JSON-сообщений
   _parseData(result) {
     if (this.isOtaInProgress || !result) return;
 
-    // === 1. ЭКСТРЕННЫЙ ЛОГ: СРАЗУ ВЫВОДИМ СЫРЫЕ ДАННЫЕ В UI И В КОНСОЛЬ ===
     const rawVal = result?.value !== undefined ? result.value : result;
     let rawPreview = "";
 
@@ -512,13 +507,11 @@ class BaseBLEDevice {
       rawPreview = String(rawVal);
     }
 
-    // Печатаем прямо в окно логов (тег RAW)
     if (typeof window.appendJsonLog === "function") {
       window.appendJsonLog("RAW", rawPreview);
     }
     this._log(`[RAW RX] ${rawPreview}`);
 
-    // === 2. ПРЕОБРАЗОВАНИЕ В БАЙТЫ (С ПЕРЕХВАТОМ ОШИБОК) ===
     let bytes;
     try {
       if (rawVal instanceof Uint8Array) {
@@ -529,11 +522,9 @@ class BaseBLEDevice {
         bytes = new Uint8Array(rawVal.buffer, rawVal.byteOffset || 0, rawVal.byteLength || rawVal.buffer.byteLength);
       } else if (typeof rawVal === 'string') {
         const cleanStr = rawVal.trim();
-        // Если это незакодированная JSON-строка
         if (cleanStr.startsWith('{') || cleanStr.startsWith('[')) {
           bytes = new TextEncoder().encode(rawVal);
         } else {
-          // Если это Base64 от Capacitor BLE
           try {
             const binaryString = window.atob(cleanStr);
             bytes = new Uint8Array(binaryString.length);
@@ -559,7 +550,6 @@ class BaseBLEDevice {
       return;
     }
 
-    // === 3. ДЕКОДИРОВАНИЕ ЮНИКОДА ===
     let chunk = "";
     try {
       chunk = this.streamDecoder.decode(bytes, { stream: true });
@@ -573,52 +563,41 @@ class BaseBLEDevice {
 
     this.rxBuffer += chunk;
 
-    // Защита от переполнения буфера
     if (this.rxBuffer.length > this.maxBufferSize) {
       const lastNewline = this.rxBuffer.lastIndexOf('\n');
       this.rxBuffer = (lastNewline !== -1) ? this.rxBuffer.substring(lastNewline + 1) : "";
       return;
     }
 
-    // === 4. ОБРАБОТКА И РАЗБОР БУФЕРА ===
     if (this.rxBuffer.includes('\n')) {
       const lines = this.rxBuffer.split('\n');
-      this.rxBuffer = lines.pop(); // Хвост оставляем в буфере
+      this.rxBuffer = lines.pop();
 
       for (const line of lines) {
         this._processSingleLine(line);
       }
     } else {
-      // Резервный фолбэк: если пришел цельный JSON без \n
       const trimmedBuf = this.rxBuffer.trim();
       if (trimmedBuf.startsWith('{') && trimmedBuf.endsWith('}')) {
         try {
           JSON.parse(trimmedBuf);
           this._processSingleLine(trimmedBuf);
           this.rxBuffer = "";
-        } catch (e) {
-          // Ожидаем оставшуюся часть пакета
-        }
+        } catch (e) {}
       }
     }
   }
   
-  // Обработка одиночной строки/JSON пакета
   _processSingleLine(line) {
     const trimmed = line.trim();
-    if (!trimmed) {
-      this._log("[RX DROP] Получена пустая строка после trim()", "warn");
-      return;
-    }
+    if (!trimmed) return;
 
-    // 1. Гарантированный вывод RX в UI или консольный логер (с фолбэком)
     if (typeof window.appendJsonLog === "function") {
       window.appendJsonLog("RX", trimmed);
     } else {
       this._log(`[RX Direct] ${trimmed}`);
     }
 
-    // 2. Разбор JSON с явным выводом ошибок вместо молчаливого catch
     try {
       const data = JSON.parse(trimmed);
 
@@ -681,7 +660,8 @@ class BaseBLEDevice {
   }
 
   async sendJson(data) {
-    const str = typeof data === "string" ? data : JSON.stringify(data);
+    let str = typeof data === "string" ? data : JSON.stringify(data);
+    if (!str.endsWith('\n')) str += '\n'; // Гарантируем разделитель команд для ESP32
     return await this.sendCmd(str);
   }
 
@@ -712,7 +692,7 @@ class BaseBLEDevice {
         throw new Error("Соединение прервано");
       }
 
-      await this.sendCmd(JSON.stringify({ cmd: "OTA_START", size: bytes.length }));
+      await this.sendCmd(JSON.stringify({ cmd: "OTA_START", size: bytes.length }) + '\n');
       await this._delay(1000);
 
       const chunkSize = Math.min(244, Math.max(20, (this.currentMtu || 23) - 3));
@@ -734,7 +714,7 @@ class BaseBLEDevice {
 
       await this._delay(200);
       const fileCrc = this._calculateCRC32(bytes);
-      await this.sendCmd(JSON.stringify({ cmd: "OTA_END", crc: fileCrc }));
+      await this.sendCmd(JSON.stringify({ cmd: "OTA_END", crc: fileCrc }) + '\n');
       
       alert("Прошивка успешно завершена! ESP32 перезагружается.");
       this.isOtaInProgress = false;
@@ -761,7 +741,7 @@ class BaseBLEDevice {
       this._setElementStyle('bottomConnectBar', 'display', 'none');
       this._setElementStyle('btnDisconnect', 'display', 'block');
     } else if (state === "connecting" || state === "reconnecting" || state === "switching") {
-      textState = state === "switching" ? "Поиск устройств..." : (state === "connecting" ? "Подключение..." : "Поиск...");
+      textState = state === "switching" ? "Поиск..." : (state === "connecting" ? "Подключение..." : "Поиск...");
       this._setElementClass('bleStatus', 'status pending spinner-active');
       this._setElementStyle('bottomConnectBar', 'display', 'none');
       this._setElementStyle('btnDisconnect', 'display', 'block');
