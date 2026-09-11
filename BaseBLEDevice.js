@@ -592,38 +592,39 @@ class BaseBLEDevice {
     }
   }
   
-  _processSingleLine(line) {
+_processSingleLine(line) {
     const trimmed = line.trim();
     if (!trimmed) return;
 
-    if (typeof window.appendJsonLog === "function") {
-      window.appendJsonLog("RX", trimmed);
-    } else {
-      this._log(`[RX Direct] ${trimmed}`);
-    }
-
     try {
-      const data = JSON.parse(trimmed);
+      const telemetryData = JSON.parse(trimmed);
 
-      if (data.version || data.fw || data.sys) {
-        if (data.version) {
-          this.espFwVersion = data.version;
-        } else if (data.fw) {
-          this.espFwVersion = data.fw;
-        } else if (data.sys) {
-          this.espFwVersion = typeof data.sys === 'object' 
-            ? (data.sys.fw || data.sys.version || JSON.stringify(data.sys)) 
-            : data.sys;
+      if (typeof window.appendJsonLog === "function") {
+        window.appendJsonLog("RX", trimmed);
+      } else {
+        this._log(`[RX JSON] ${trimmed}`);
+      }
+
+      if (telemetryData.version || telemetryData.fw || telemetryData.sys) {
+        if (telemetryData.version) {
+          this.espFwVersion = telemetryData.version;
+        } else if (telemetryData.fw) {
+          this.espFwVersion = telemetryData.fw;
+        } else if (telemetryData.sys) {
+          this.espFwVersion = typeof telemetryData.sys === 'object' 
+            ? (telemetryData.sys.fw || telemetryData.sys.version || JSON.stringify(telemetryData.sys)) 
+            : telemetryData.sys;
         }
         this.updateEspFwUI();
       }
 
-      this.onTelemetry(data);
+      // Вывод красиво отформатированного JSON на экран
+      this._setElementText('telemetryData', JSON.stringify(telemetryData, null, 2));
+
+      this.onTelemetry(telemetryData);
     } catch (e) {
-      this._log(`[RX JSON ERR] Ошибка парсинга: "${trimmed}" — ${e.message}`, "error");
-      if (typeof window.appendJsonLog === "function") {
-        window.appendJsonLog("ERR", `Невалидный JSON: ${e.message}`);
-      }
+      // Пакет поврежден или разорван — пропускаем
+      this._log(`[Skip] Невалидный JSON: ${trimmed}`);
     }
   }
   
