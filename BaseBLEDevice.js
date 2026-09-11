@@ -578,6 +578,11 @@ class BaseBLEDevice {
         const trimmed = line.trim();
         if (!trimmed) continue;
 
+        // ЛОГИРОВАНИЕ ВХОДЯЩЕГО ПАКЕТА (RX) В ИНТЕРФЕЙС
+        if (typeof window.appendJsonLog === "function") {
+          window.appendJsonLog("RX", trimmed);
+        }
+
         try {
           const data = JSON.parse(trimmed);
 
@@ -603,6 +608,7 @@ class BaseBLEDevice {
       }
     } catch (e) {}
   }
+
   // Низкоуровневая запись сырых байт в RX-характеристику ESP32
   async _writeRaw(deviceId, service, characteristic, uint8Bytes) {
     const uint8ToHex = (bytes) => Array.from(bytes).map(b => b.toString(16).padStart(2, '0')).join(' ');
@@ -633,8 +639,20 @@ class BaseBLEDevice {
   // Отправка текстовой команды (строки) на устройство
   async sendCmd(cmd) {
     if (!this.connectedDeviceId || !this.BluetoothLe) throw new Error("Устройство не подключено");
+
+    // ЛОГИРОВАНИЕ ИСХОДЯЩЕГО ПАКЕТА (TX) В ИНТЕРФЕЙС
+    if (typeof window.appendJsonLog === "function") {
+      window.appendJsonLog("TX", cmd);
+    }
+
     const bytes = new TextEncoder().encode(cmd);
     await this._sendBytes(bytes, 3000);
+  }
+
+  // Удобный хелпер для отправки JSON-структур
+  async sendJson(data) {
+    const str = typeof data === "string" ? data : JSON.stringify(data);
+    return await this.sendCmd(str);
   }
 
   // Процедура беспроводного обновления прошивки ESP32 (OTA) по BLE
