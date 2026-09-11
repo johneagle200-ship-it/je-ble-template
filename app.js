@@ -23,11 +23,16 @@ class MainApp extends BaseApp {
       if (uptimeEl) uptimeEl.innerText = `${uptime} с`;
     }
 
-    // 3. Обновление версии прошивки ESP32
+    // 3. Обновление версии прошивки ESP32 и запуск проверки обновлений через AppUpdater
     const fwVersion = data.fw || data.sys?.fw || data.version;
     if (fwVersion) {
       const fwEl = document.getElementById('espFwText');
       if (fwEl) fwEl.innerText = fwVersion;
+
+      // Передаем текущую версию прошивки в AppUpdater для сравнения с main/package.json
+      if (this.appUpdater && typeof this.appUpdater.checkFirmwareUpdate === 'function') {
+        this.appUpdater.checkFirmwareUpdate(fwVersion);
+      }
     }
   }
 }
