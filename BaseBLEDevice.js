@@ -473,7 +473,6 @@ async connectNativeBLE(deviceId) {
     } catch (err) {
       console.error("BLE connect error:", err);
       if (!isAborted()) {
-        // Умный реконнект, если связь не была разорвана вручную
         if (!this.isExplicitDisconnect && !this.autoConnectBlocked && typeof this.scheduleReconnect === 'function') {
           console.warn("[AutoConnect] Потеряна связь с ESP32, повторная попытка...");
           this.updateUI("reconnecting");
@@ -555,7 +554,6 @@ async connectNativeBLE(deviceId) {
         bytes = new Uint8Array(rawVal.buffer, rawVal.byteOffset || 0, rawVal.byteLength || rawVal.buffer.byteLength);
       } else if (typeof rawVal === 'string') {
         const cleanStr = rawVal.trim();
-        // Проверка на шестнадцатеричную строку (Hex)
         if (/^[0-9a-fA-F\s]+$/.test(cleanStr) && cleanStr.replace(/\s+/g, '').length % 2 === 0) {
           const cleanHex = cleanStr.replace(/\s+/g, '');
           bytes = new Uint8Array(cleanHex.length / 2);
@@ -626,9 +624,7 @@ async connectNativeBLE(deviceId) {
     try {
       const telemetryData = JSON.parse(trimmed);
 
-      // Обновляем метку времени получения пакета телеметрии
       this.lastRxTimestamp = Date.now();
-      // Взводим сторожевой таймер строго по первому полученному пакету телеметрии
       if (!this.isWatchdogArmed) {
         this.isWatchdogArmed = true;
         this._startWatchdog();
@@ -702,9 +698,17 @@ async connectNativeBLE(deviceId) {
     return await this.sendCmd(str);
   }
 
+  // --- ИЗМЕНЕНИЯ В МЕТОДЕ ОБНОВЛЕНИЯ OTA ---
   async updateESP32Firmware(source = null) {
     if (!confirm("Начать прошивку ESP32 по BLE?")) return;
     const sessionAtStart = this.connectionSessionId;
+
+    const hideNoticeUI = () => {
+      const updateNotice = document.getElementById('updateNotice');
+      const btnUpdateFW = document.getElementById('btnUpdateFW');
+      if (updateNotice) updateNotice.style.display = 'none';
+      if (btnUpdateFW) btnUpdateFW.style.display = 'none';
+    };
 
     try {
       this.isOtaInProgress = true;
@@ -718,7 +722,7 @@ async connectNativeBLE(deviceId) {
       } else {
         const binUrl = typeof source === 'string' 
           ? source 
-          : `https://github.com/${this.repoOwner}/${this.repoName}/releases/download/latest/firmware.bin`;
+          : `https://raw.githubusercontent.com/${this.repoOwner}/${this.repoName}/main/firmware.bin`;
 
         const res = await fetch(binUrl);
         if (!res.ok) throw new Error(`Ошибка загрузки firmware.bin (${res.status})`);
@@ -729,6 +733,7 @@ async connectNativeBLE(deviceId) {
         throw new Error("Соединение прервано");
       }
 
+      this._log(`[OTA] Отправка команды OTA_START (размер: ${bytes.length} байт)`);
       await this.sendCmd(JSON.stringify({ cmd: "OTA_START", size: bytes.length }) + '\n');
       await this._delay(1000);
 
@@ -744,19 +749,24 @@ async connectNativeBLE(deviceId) {
 
         const percent = Math.round((offset / total) * 100);
         if (offset % (chunkSize * 5) === 0 || offset + chunkSize >= total) {
-          if (typeof this.onOtaProgressCallback === 'function') this.onOtaProgressCallback(percent);
+          if (typeof this.onOtaProgressCallback === 'function') {
+            this.onOtaProgressCallback(percent);
+          }
           this._setElementText('bleStatus', `Прошивка ESP32: ${percent}%`);
         }
       }
 
       await this._delay(200);
       const fileCrc = this._calculateCRC32(bytes);
+      this._log(`[OTA] Отправка команды OTA_END (CRC32: ${fileCrc})`);
       await this.sendCmd(JSON.stringify({ cmd: "OTA_END", crc: fileCrc }) + '\n');
       
+      hideNoticeUI();
       alert("Прошивка успешно завершена! ESP32 перезагружается.");
       this.isOtaInProgress = false;
       this.disconnectBLE();
     } catch (e) {
+      this._log(`[OTA Error] ${e.message}`, "error");
       alert("Ошибка прошивки: " + e.message);
       this.isOtaInProgress = false;
       this.updateUI("connected");
@@ -827,11 +837,6 @@ async connectNativeBLE(deviceId) {
       }
     }
   }
-  
-  /*_setElementClass(id, className) {
-    const el = document.getElementById(id);
-    if (el) el.setAttribute('class', className);
-  }*/
   
   _setElementStyle(id, property, value) {
     const el = document.getElementById(id);
