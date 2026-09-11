@@ -3,6 +3,8 @@ class AppUpdater {
     this.repoOwner = config.repoOwner || "johneagle200-ship-it";
     this.repoName = config.repoName || "je-ble-template";
     this.currentVersion = null;
+    this.currentEspFwVersion = null;
+    this.latestFirmwareInfo = null;
   }
 
   _getPlugins() {
@@ -32,7 +34,7 @@ class AppUpdater {
       const pkg = await res.json();
       this.currentVersion = pkg.version;
       this.applyVersionUI(this.currentVersion);
-      this._log(`Текущая версия: v${this.currentVersion}`);
+      this._log(`Текущая версия приложения: v${this.currentVersion}`);
     } catch (e) {
       this._log(`Ошибка чтения версии: ${e.message}`, "error");
     }
@@ -46,6 +48,7 @@ class AppUpdater {
     if (menuEl) menuEl.innerText = verStr;
   }
 
+  // --- ПРОВЕРКА ОБНОВЛЕНИЯ APK ПРИЛОЖЕНИЯ ---
   async checkForUpdates() {
     try {
       const apiUrl = `https://api.github.com/repos/${this.repoOwner}/${this.repoName}/releases/latest`;
@@ -63,7 +66,7 @@ class AppUpdater {
                        release.assets?.find(a => a.name.endsWith('.apk'));
 
       if (remoteVer && apkAsset && this.isNewerVersion(remoteVer, this.currentVersion)) {
-        this._log(`Найден новый релиз v${remoteVer}. URL: ${apkAsset.browser_download_url}`);
+        this._log(`Найден новый релиз приложения v${remoteVer}. URL: ${apkAsset.browser_download_url}`);
         this.latestApkUrl = apkAsset.browser_download_url;
         this.showUpdateUI(remoteVer);
       }
@@ -72,7 +75,55 @@ class AppUpdater {
     }
   }
 
+  // --- ПРОВЕРКА ОБНОВЛЕНИЯ ПРОШИВКИ ESP32 ---
+  async checkFirmwareUpdate(espFwVersion) {
+    if (!espFwVersion) return;
+    this.currentEspFwVersion = espFwVersion;
+
+    try {
+      const rawPkgUrl = `https://raw.githubusercontent.com/${this.repoOwner}/${this.repoName}/main/package.json`;
+      this._log(`Проверка прошивки ESP32 по URL: ${rawPkgUrl}`);
+
+      const res = await fetch(rawPkgUrl);
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      
+      const pkg = await res.json();
+      if (!pkg.firmware || !pkg.firmware.version) return;
+
+      const remoteFwVer = pkg.firmware.version;
+
+      if (this.isNewerVersion(remoteFwVer, this.currentEspFwVersion)) {
+        const binFileName = pkg.firmware.file || "firmware.bin";
+        
+        this.latestFirmwareInfo = {
+          version: remoteFwVer,
+          changelog: pkg.firmware.changelog || "",
+          downloadUrl: `https://raw.githubusercontent.com/${this.repoOwner}/${this.repoName}/main/${binFileName}`
+        };
+
+        this._log(`Доступна новая прошивка ESP32 v${remoteFwVer} (${binFileName})`);
+        this.showFirmwareUpdateUI(this.latestFirmwareInfo);
+      }
+    } catch (err) {
+      this._log(`Ошибка проверки прошивки: ${err.message}`, "warn");
+    }
+  }
+
+  // --- СКАЧИВАНИЕ БИНАРНИКА DЛЯ BLE OTA ---
+  async fetchFirmwareBinary() {
+    if (!this.latestFirmwareInfo?.downloadUrl) {
+      throw new Error("Ссылка на бинарник прошивки не найдена");
+    }
+
+    this._log(`Скачивание бинарника прошивки: ${this.latestFirmwareInfo.downloadUrl}`);
+    const res = await fetch(this.latestFirmwareInfo.downloadUrl);
+    if (!res.ok) throw new Error(`Ошибка скачивания файла: HTTP ${res.status}`);
+
+    return await res.arrayBuffer(); // Возвращает бинарник для передачи в BLE OTA
+  }
+
   isNewerVersion(remote, local) {
+    if (!local) return true;
     const r = remote.split('.').map(Number);
     const l = local.split('.').map(Number);
     for (let i = 0; i < Math.max(r.length, l.length); i++) {
@@ -94,6 +145,22 @@ class AppUpdater {
     if (btnUpdateApp) {
       btnUpdateApp.style.display = 'block';
       btnUpdateApp.onclick = () => this.updateApp();
+    }
+  }
+
+  showFirmwareUpdateUI(fwInfo) {
+    const badge = document.getElementById('menuBadge');
+    const fwNotice = document.getElementById('fwUpdateNotice');
+    const btnUpdateFw = document.getElementById('btnUpdateFirmware');
+    const fwTextEl = document.getElementById('fwUpdateNoticeText');
+
+    if (badge) badge.style.display = 'block';
+    if (fwNotice) fwNotice.style.display = 'block';
+    if (fwTextEl) {
+      fwTextEl.innerText = `Доступна прошивка ESP32 v${fwInfo.version}: ${fwInfo.changelog}`;
+    }
+    if (btnUpdateFw) {
+      btnUpdateFw.style.display = 'block';
     }
   }
 
