@@ -4,7 +4,7 @@
   "description": "Universal Base Template for JE BLE Devices",
   "firmware": {
     "version": "1.0.0",
-    "file": "firmware.bin",
+    "file": "JE_Base_Device.ino.bin",
     "changelog": "Первоначальная сборка: оптимизация работы BLE и исправление таймеров"
   },
   "scripts": {
