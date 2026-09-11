@@ -2,6 +2,11 @@
   "name": "je-ble-template",
   "version": "1.0.61",
   "description": "Universal Base Template for JE BLE Devices",
+  "firmware": {
+    "version": "1.0.0",
+    "file": "firmware.bin",
+    "changelog": "Первоначальная сборка: оптимизация работы BLE и исправление таймеров"
+  },
   "scripts": {
     "build": "echo 'No build step required'"
   },
