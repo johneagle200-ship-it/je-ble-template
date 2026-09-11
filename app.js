@@ -4,35 +4,27 @@ class MainApp extends BaseApp {
       repoOwner: "johneagle200-ship-it",
       repoName: "je-ble-template"
     });
-
-    // Явно связываем BLE-декодер с методом обработки телеметрии MainApp
-    if (this.ble) {
-      this.ble.onTelemetryCallback = (data) => this.onTelemetry(data);
-    }
   }
 
   onTelemetry(data) {
-    console.log("[APP TELEMETRY]", data); // Лог для Eruda
+    console.log("[APP TELEMETRY]", data);
 
-    // 1. Обновление счетчика
-    const currentCounter = data.counter !== undefined ? data.counter : (data.cnt !== undefined ? data.cnt : null);
-    if (currentCounter !== null) {
+    // 1. Обновление счётчика
+    const counter = data.counter ?? data.cnt ?? data.val;
+    if (counter !== undefined && counter !== null) {
       const el = document.getElementById('telemetryData');
-      if (el) el.innerText = currentCounter;
-    } else if (data.val !== undefined) {
-      const el = document.getElementById('telemetryData');
-      if (el) el.innerText = data.val;
+      if (el) el.innerText = counter;
     }
 
     // 2. Обновление аптайма
-    const currentUptime = data.uptime !== undefined ? data.uptime : (data.up !== undefined ? data.up : null);
-    if (currentUptime !== null) {
+    const uptime = data.uptime ?? data.up;
+    if (uptime !== undefined && uptime !== null) {
       const uptimeEl = document.getElementById('uptimeData');
-      if (uptimeEl) uptimeEl.innerText = `${currentUptime} с`;
+      if (uptimeEl) uptimeEl.innerText = `${uptime} с`;
     }
 
     // 3. Обновление версии прошивки ESP32
-    const fwVersion = data.fw || (data.sys && data.sys.fw) || data.version;
+    const fwVersion = data.fw || data.sys?.fw || data.version;
     if (fwVersion) {
       const fwEl = document.getElementById('espFwText');
       if (fwEl) fwEl.innerText = fwVersion;
