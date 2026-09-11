@@ -21,6 +21,12 @@ class BaseBLEDevice {
     this.reconnectTimer = null;
     this.isOtaInProgress = false;
 
+    // Сторожевой таймер (Watchdog) для контроля зависания связи
+    this.watchdogTimer = null;
+    this.lastRxTimestamp = 0;
+    this.watchdogIntervalMs = config.watchdogIntervalMs || 12000;
+    this.isWatchdogArmed = false;
+
     this.connectionSessionId = 0;
     this._writeQueue = Promise.resolve();
 
@@ -29,11 +35,6 @@ class BaseBLEDevice {
     this.currentStep = "IDLE";
 
     this.hasPermissions = false;
-
-    // Свойства сторожевого таймера тихих обрывов
-    this.lastRxTimestamp = 0;
-    this.watchdogTimer = null;
-    this.watchdogIntervalMs = 4500; // Порог таймаута (при отправке телеметрии раз в 1 сек)
 
     // Буферы и декодер для входящего потока данных
     this.rxBuffer = "";
@@ -56,52 +57,6 @@ class BaseBLEDevice {
 
   _delay(ms) {
     return new Promise((resolve) => setTimeout(resolve, ms));
-  }
-
-  _startWatchdog() {
-    this._stopWatchdog();
-    this.lastRxTimestamp = Date.now();
-    this.watchdogTimer = setInterval(() => {
-      if (!this.connectedDeviceId || this.isConnecting || this.isOtaInProgress) return;
-
-      const elapsed = Date.now() - this.lastRxTimestamp;
-      if (elapsed > this.watchdogIntervalMs) {
-        this._log(`[Watchdog] ⚠️ Тихий обрыв связи! Нет данных ${elapsed}мс. Принудительный сброс и реконнект.`);
-        this._handleSilentDisconnect();
-      }
-    }, 1000);
-  }
-
-  _stopWatchdog() {
-    if (this.watchdogTimer) {
-      clearInterval(this.watchdogTimer);
-      this.watchdogTimer = null;
-    }
-  }
-
-  async _handleSilentDisconnect() {
-    this._stopWatchdog();
-    this.connectionSessionId++;
-    this.isConnecting = false;
-    clearTimeout(this.stableTimer);
-
-    if (this.valueListener) {
-      try { await this.valueListener.remove(); } catch (e) {}
-      this.valueListener = null;
-    }
-
-    if (this.connectedDeviceId && this.BluetoothLe) {
-      try {
-        await this.BluetoothLe.disconnect({ deviceId: this.connectedDeviceId });
-      } catch (e) {}
-    }
-
-    if (!this.isExplicitDisconnect && this.connectedDeviceId && !this.autoConnectBlocked) {
-      this.updateUI("reconnecting");
-      this.scheduleReconnect(2000);
-    } else {
-      this.updateUI("disconnected");
-    }
   }
 
   _getCrcTable() {
@@ -223,6 +178,41 @@ class BaseBLEDevice {
     this._log("[Crash Guard] Блокировка сбоя сброшена.");
   }
 
+  _stopWatchdog() {
+    if (this.watchdogTimer) {
+      clearInterval(this.watchdogTimer);
+      this.watchdogTimer = null;
+    }
+    this.isWatchdogArmed = false;
+  }
+
+  _startWatchdog() {
+    if (this.watchdogTimer) clearInterval(this.watchdogTimer);
+    this.watchdogTimer = setInterval(() => {
+      if (!this.connectedDeviceId || this.isConnecting || this.isOtaInProgress) return;
+
+      if (Date.now() - this.lastRxTimestamp > this.watchdogIntervalMs) {
+        this._log("[Watchdog] Нет входящей телеметрии, обрыв связи. Переподключение...", "warn");
+        this._stopWatchdog();
+        this._handleSilentDisconnect();
+      }
+    }, 3000);
+  }
+
+  async _handleSilentDisconnect() {
+    if (this.valueListener) {
+      try { await this.valueListener.remove(); } catch (e) {}
+      this.valueListener = null;
+    }
+    if (this.connectedDeviceId && this.BluetoothLe) {
+      try {
+        await this.BluetoothLe.disconnect({ deviceId: this.connectedDeviceId });
+      } catch (e) {}
+    }
+    this.updateUI("reconnecting");
+    this.scheduleReconnect(3000);
+  }
+
   async init() {
     this._log("[JE Core] Запуск процесса инициализации BLE...");
 
@@ -243,8 +233,6 @@ class BaseBLEDevice {
             this.connectionSessionId++; 
             this.isConnecting = false;
             clearTimeout(this.stableTimer);
-            
-            // Останавливаем сторожевой таймер при физическом дисконнекте
             this._stopWatchdog();
 
             if (!this.isExplicitDisconnect && this.connectedDeviceId && !this.autoConnectBlocked) {
@@ -321,6 +309,7 @@ class BaseBLEDevice {
       this.isExplicitDisconnect = true;
       clearTimeout(this.reconnectTimer);
       clearTimeout(this.stableTimer);
+      this._stopWatchdog();
       
       this.updateUI("switching");
 
@@ -394,6 +383,7 @@ class BaseBLEDevice {
       this.isConnecting = true;
       clearTimeout(this.reconnectTimer);
       clearTimeout(this.stableTimer);
+      this._stopWatchdog();
   
       localStorage.setItem("ble_crash_pending", "1");
       this.updateUI("connecting");
@@ -472,10 +462,6 @@ class BaseBLEDevice {
       this.updateUI("connected");
   
       await this._safeSendHandshake();
-      
-      // Запуск сторожевого таймера контроля активности связи
-      this._startWatchdog();
-
       this._setCurrentStep("OPERATIONAL_PENDING_GUARD");
   
       this.stableTimer = setTimeout(() => {
@@ -513,8 +499,6 @@ class BaseBLEDevice {
     this.isExplicitDisconnect = true;
     clearTimeout(this.reconnectTimer);
     clearTimeout(this.stableTimer);
-    
-    // Останавливаем сторожевой таймер
     this._stopWatchdog();
     
     localStorage.removeItem("ble_crash_pending");
@@ -553,9 +537,6 @@ class BaseBLEDevice {
 
   _parseData(result) {
     if (this.isOtaInProgress || !result) return;
-    
-    // Фиксируем успешный приём пакета для Watchdog
-    this.lastRxTimestamp = Date.now();
 
     const rawVal = result?.value !== undefined ? result.value : result;
 
@@ -640,6 +621,15 @@ class BaseBLEDevice {
     try {
       const telemetryData = JSON.parse(trimmed);
 
+      // Обновляем метку времени получения пакета телеметрии
+      this.lastRxTimestamp = Date.now();
+      // Взводим сторожевой таймер строго по первому полученному пакету телеметрии
+      if (!this.isWatchdogArmed) {
+        this.isWatchdogArmed = true;
+        this._startWatchdog();
+        this._log("[Watchdog] Сторожевой таймер взведен по первому пакету телеметрии.");
+      }
+
       if (typeof window.appendJsonLog === "function") {
         window.appendJsonLog("RX", trimmed);
       } else {
@@ -658,8 +648,6 @@ class BaseBLEDevice {
         }
         this.updateEspFwUI();
       }
-
-      //this._setElementText('telemetryData', JSON.stringify(telemetryData, null, 2));
 
       this.onTelemetry(telemetryData);
     } catch (e) {
@@ -827,4 +815,3 @@ class BaseBLEDevice {
     if (el) el.style[property] = value;
   }
 }
-```[cite: 13]
