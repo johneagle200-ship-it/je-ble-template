@@ -172,6 +172,7 @@
       flex-direction: column;
       text-align: left;
       box-sizing: border-box;
+      overflow-y: auto;
     }
 
     .menu-header {
@@ -207,6 +208,7 @@
     .info-card p { margin: 0; color: #ccc; }
     .info-card strong { color: #fff; }
 
+    /* Стили блока обновления OTA */
     .update-card {
       background: #2b2200;
       border: 1px solid #ffca28;
@@ -216,6 +218,35 @@
     }
 
     .update-card p { margin: 0 0 10px 0; font-size: 13px; font-weight: bold; color: #ffca28; }
+
+    /* Элементы прогресс-бара OTA */
+    .ota-progress-container {
+      margin-top: 10px;
+      display: none;
+    }
+
+    .ota-progress-bar {
+      width: 100%;
+      height: 8px;
+      background: #333;
+      border-radius: 4px;
+      overflow: hidden;
+      margin-bottom: 6px;
+    }
+
+    .ota-progress-fill {
+      width: 0%;
+      height: 100%;
+      background: #ff9800;
+      transition: width 0.2s ease;
+    }
+
+    .ota-progress-text {
+      font-size: 11px;
+      color: #ffca28;
+      text-align: center;
+      font-family: monospace;
+    }
 
     .btn-group-vertical {
       display: flex;
@@ -347,9 +378,19 @@
         <p>Связь: <strong id="bleStatusInMenu">Отключено</strong></p>
       </div>
 
+      <!-- Карточка уведомлений OTA -->
       <div id="updateNotice" class="update-card" style="display: none;">
         <p id="updateNoticeText">Обнаружено обновление!</p>
-        <div class="btn-group-vertical">
+        
+        <!-- Прогресс-бар загрузки файла по BLE -->
+        <div id="otaProgressContainer" class="ota-progress-container">
+          <div class="ota-progress-bar">
+            <div id="otaProgressFill" class="ota-progress-fill"></div>
+          </div>
+          <div id="otaProgressText" class="ota-progress-text">0%</div>
+        </div>
+
+        <div class="btn-group-vertical" style="margin-top: 10px;">
           <button id="btnUpdateApp" style="display:none;" onclick="app.updateApp()">Обновить Приложение</button>
           <button id="btnUpdateFW" class="btn-warning" style="display:none;" onclick="app.updateESP32Firmware()">Прошить ESP32</button>
         </div>
@@ -359,6 +400,10 @@
         <button id="btnCheckUpdates" class="btn-secondary" onclick="app.checkForUpdates()">Проверить обновления</button>
         <button id="btnSelectNew" class="btn-secondary" onclick="app.selectNewDevice(); toggleMenu();">Сменить устройство</button>
         
+        <!-- Скрытый элемент выбора локального файла .bin для ручной прошивки -->
+        <input type="file" id="localFirmwareInput" accept=".bin" style="display: none;" onchange="handleLocalFirmwareSelect(event)" />
+        <button id="btnLocalOTA" class="btn-secondary" style="font-size: 12px; background: #222; color: #888;" onclick="document.getElementById('localFirmwareInput').click()">📁 Локальная прошивка (.bin)</button>
+
         <hr class="divider">
 
         <button id="btnDisconnect" class="btn-danger" style="display: none;" onclick="app.disconnectBLE(); toggleMenu();">Отключить устройство</button>
@@ -401,9 +446,47 @@
       const verMenu = document.getElementById('appVersion');
       if (verHeader) verHeader.textContent = currentVer;
       if (verMenu) verMenu.textContent = currentVer;
+
+      // Связка функции индикации прогресса OTA с BaseBLEDevice
+      if (window.app && window.app.ble) {
+        window.app.ble.onOtaProgressCallback = (percent) => {
+          const container = document.getElementById('otaProgressContainer');
+          const fill = document.getElementById('otaProgressFill');
+          const text = document.getElementById('otaProgressText');
+          
+          if (container) container.style.display = 'block';
+          if (fill) fill.style.width = percent + '%';
+          if (text) text.textContent = `Загрузка в ESP32: ${percent}%`;
+        };
+      }
     });
 
-    // Вспомогательные функции выводного JSON-лога (вызываются из BaseBLEDevice)
+    // Обработчик выбора файла .bin с устройства для ручной прошивки
+    async function handleLocalFirmwareSelect(event) {
+      const file = event.target.files[0];
+      if (!file) return;
+
+      if (!file.name.endsWith('.bin')) {
+        alert("Выберите файл с расширением .bin");
+        return;
+      }
+
+      try {
+        const arrayBuffer = await file.arrayBuffer();
+        if (window.app && typeof window.app.updateESP32Firmware === 'function') {
+          // Передаем ArrayBuffer с файлом напрямую в модуль BLE
+          window.app.updateESP32Firmware(arrayBuffer);
+        } else if (window.app && window.app.ble) {
+          window.app.ble.updateESP32Firmware(arrayBuffer);
+        }
+      } catch (err) {
+        alert("Ошибка чтения файла: " + err.message);
+      } finally {
+        event.target.value = ''; // Сброс контрола
+      }
+    }
+
+    // Вспомогательные функции выводного JSON-лога
     function appendJsonLog(direction, jsonStr) {
       const logContainer = document.getElementById('jsonPacketLog');
       if (!logContainer) return;
