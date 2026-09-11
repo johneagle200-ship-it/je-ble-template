@@ -561,44 +561,25 @@ class BaseBLEDevice {
       }
 
       this.rxBuffer += chunk;
+      
       // Защита от переполнения буфера
       if (this.rxBuffer.length > this.maxBufferSize) {
-        const lastOpen = this.rxBuffer.lastIndexOf('{');
-        this.rxBuffer = (lastOpen !== -1) ? this.rxBuffer.substring(lastOpen) : "";
+        const lastNewline = this.rxBuffer.lastIndexOf('\n');
+        this.rxBuffer = (lastNewline !== -1) ? this.rxBuffer.substring(lastNewline + 1) : "";
         return;
       }
 
-      // Выделение полных JSON-объектов по балансу фигурных скобок
-      while (true) {
-        const openIdx = this.rxBuffer.indexOf('{');
-        if (openIdx === -1) {
-          if (this.rxBuffer.length > 2048) this.rxBuffer = "";
-          break;
-        }
-        if (openIdx > 0) this.rxBuffer = this.rxBuffer.substring(openIdx);
+      // Разделение входящего потока по символу перевода строки (\n)
+      const lines = this.rxBuffer.split('\n');
+      // Последний элемент — это незавершенный кусок строки, оставляем его в буфере до следующего пакета
+      this.rxBuffer = lines.pop();
 
-        let depth = 0, inString = false, escape = false, closeIdx = -1;
-        for (let i = 0; i < this.rxBuffer.length; i++) {
-          const char = this.rxBuffer[i];
-          if (escape) { escape = false; continue; }
-          if (char === '\\' && inString) { escape = true; continue; }
-          if (char === '"') { inString = !inString; continue; }
-          if (!inString) {
-            if (char === '{') depth++;
-            else if (char === '}') {
-              depth--;
-              if (depth === 0) { closeIdx = i; break; }
-            }
-          }
-        }
-
-        if (closeIdx === -1) break;
-
-        const candidate = this.rxBuffer.substring(0, closeIdx + 1);
-        this.rxBuffer = this.rxBuffer.substring(closeIdx + 1);
+      for (const line of lines) {
+        const trimmed = line.trim();
+        if (!trimmed) continue;
 
         try {
-          const data = JSON.parse(candidate);
+          const data = JSON.parse(trimmed);
 
           // Автоматическое определение версии прошивки из системных ответов
           if (data.version || data.fw || data.sys) {
@@ -616,11 +597,12 @@ class BaseBLEDevice {
 
           // Передача распарсенного объекта в обработчик телеметрии
           this.onTelemetry(data);
-        } catch (e) {}
+        } catch (e) {
+          // Некорректные строки (не JSON) просто пропускаем
+        }
       }
     } catch (e) {}
   }
-
   // Низкоуровневая запись сырых байт в RX-характеристику ESP32
   async _writeRaw(deviceId, service, characteristic, uint8Bytes) {
     const uint8ToHex = (bytes) => Array.from(bytes).map(b => b.toString(16).padStart(2, '0')).join(' ');
