@@ -10,7 +10,7 @@ class BaseBLEDevice {
     this.txUuid = (config.txUuid || "6e400003-b5a3-f393-e0a9-e50e24dcca9e").toLowerCase();
     this.namePrefix = config.namePrefix || "JE_";
 
-    // Флаги состояния и автоподключения
+    // Флаги состояния и автопод подключения
     this.autoConnect = config.autoConnect !== undefined ? config.autoConnect : true;
     this.autoConnectBlocked = false;
     this.espFwVersion = null;
@@ -391,13 +391,24 @@ class BaseBLEDevice {
           this._parseData(result);
         }
       };
+
+      // Очищаем старый слушатель, если остался
+      if (this.valueListener) {
+        try { await this.valueListener.remove(); } catch (e) {}
+        this.valueListener = null;
+      }
   
+      // Подписываемся на событие valueChange и активируем нотификации в Capacitor BLE
       try {
-        await this.BluetoothLe.startNotifications(notifOptions, onDataReceived);
+        this.valueListener = await this.BluetoothLe.addListener('valueChange', onDataReceived);
+        await this.BluetoothLe.startNotifications(notifOptions);
       } catch (notifErr) {
         await this._delay(600);
         if (isAborted()) return;
-        await this.BluetoothLe.startNotifications(notifOptions, onDataReceived);
+        if (!this.valueListener) {
+          this.valueListener = await this.BluetoothLe.addListener('valueChange', onDataReceived);
+        }
+        await this.BluetoothLe.startNotifications(notifOptions);
       }
   
       if (isAborted()) return;
@@ -484,7 +495,6 @@ class BaseBLEDevice {
   }
 
   // Парсинг входящего потока байтов и сборка JSON-сообщений
-// Парсинг входящего потока байтов и сборка JSON-сообщений
   _parseData(result) {
     if (this.isOtaInProgress || !result) return;
 
@@ -594,7 +604,6 @@ class BaseBLEDevice {
   }
   
   // Обработка одиночной строки/JSON пакета
-// Обработка одиночной строки/JSON пакета
   _processSingleLine(line) {
     const trimmed = line.trim();
     if (!trimmed) {
