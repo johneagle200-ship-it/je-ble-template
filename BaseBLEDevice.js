@@ -495,26 +495,10 @@ class BaseBLEDevice {
     }, delayMs);
   }
 
-  _parseData(result) {
+_parseData(result) {
     if (this.isOtaInProgress || !result) return;
 
     const rawVal = result?.value !== undefined ? result.value : result;
-    let rawPreview = "";
-
-    try {
-      if (typeof rawVal === 'object' && rawVal !== null) {
-        rawPreview = JSON.stringify(rawVal);
-      } else {
-        rawPreview = String(rawVal);
-      }
-    } catch (e) {
-      rawPreview = String(rawVal);
-    }
-
-    if (typeof window.appendJsonLog === "function") {
-      window.appendJsonLog("RAW", rawPreview);
-    }
-    this._log(`[RAW RX] ${rawPreview}`);
 
     let bytes;
     try {
@@ -542,15 +526,9 @@ class BaseBLEDevice {
       } else if (typeof rawVal === 'object' && rawVal !== null) {
         bytes = new Uint8Array(Object.values(rawVal));
       } else {
-        if (typeof window.appendJsonLog === "function") {
-          window.appendJsonLog("ERR", `Неизвестный тип rawVal: ${typeof rawVal}`);
-        }
         return;
       }
     } catch (err) {
-      if (typeof window.appendJsonLog === "function") {
-        window.appendJsonLog("ERR", `Ошибка байт-конвертации: ${err.message}`);
-      }
       return;
     }
 
@@ -559,9 +537,6 @@ class BaseBLEDevice {
       chunk = this.streamDecoder.decode(bytes, { stream: true });
     } catch (decErr) {
       this.streamDecoder = new TextDecoder('utf-8', { fatal: false });
-      if (typeof window.appendJsonLog === "function") {
-        window.appendJsonLog("ERR", `Ошибка TextDecoder: ${decErr.message}`);
-      }
       return;
     }
 
