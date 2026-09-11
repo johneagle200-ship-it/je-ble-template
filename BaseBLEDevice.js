@@ -55,7 +55,7 @@ class BaseBLEDevice {
 
   _getCrcTable() {
     if (this._crcTable) return this._crcTable;
-    let table = new Uint32Array(256);
+    const table = new Uint32Array(256);
     for (let i = 0; i < 256; i++) {
       let c = i;
       for (let j = 0; j < 8; j++) {
@@ -175,8 +175,7 @@ class BaseBLEDevice {
   async init() {
     this._log("[JE Core] Запуск процесса инициализации BLE...");
 
-    const crashPending = localStorage.getItem("ble_crash_pending");
-    if (crashPending === "1") {
+    if (localStorage.getItem("ble_crash_pending") === "1") {
       this.autoConnectBlocked = true;
       setTimeout(() => this.showLogsModal(), 300);
     }
@@ -189,7 +188,7 @@ class BaseBLEDevice {
 
       if (!this.disconnectListener) {
         try {
-          this.disconnectListener = await this.BluetoothLe.addListener('disconnected', (info) => {
+          this.disconnectListener = await this.BluetoothLe.addListener('disconnected', () => {
             this.connectionSessionId++; 
             this.isConnecting = false;
             clearTimeout(this.stableTimer);
@@ -396,7 +395,6 @@ class BaseBLEDevice {
       }
   
       try {
-        //this.valueListener = await this.BluetoothLe.addListener('valueChange', onDataReceived);
         const eventName = `notification|${deviceId}|${this.serviceUuid}|${this.txUuid}`;
         this.valueListener = await this.BluetoothLe.addListener(eventName, onDataReceived);
         await this.BluetoothLe.startNotifications(notifOptions);
@@ -404,7 +402,6 @@ class BaseBLEDevice {
         await this._delay(600);
         if (isAborted()) return;
         if (!this.valueListener) {
-          //this.valueListener = await this.BluetoothLe.addListener('valueChange', onDataReceived);
           const eventName = `notification|${deviceId}|${this.serviceUuid}|${this.txUuid}`;
           this.valueListener = await this.BluetoothLe.addListener(eventName, onDataReceived);
         }
@@ -413,7 +410,6 @@ class BaseBLEDevice {
   
       if (isAborted()) return;
 
-      // Пауза 500мс для гарантированной записи в CCCD (0x2902) на стороне ESP32
       this._setCurrentStep("SUBSCRIBING_CCCD_WAIT");
       await this._delay(500);
       if (isAborted()) return;
@@ -421,7 +417,6 @@ class BaseBLEDevice {
       this._setCurrentStep("CONNECTED_WAITING_STABILITY");
       this.updateUI("connected");
   
-      // Отправка рукопожатия "get_sys"
       await this._safeSendHandshake();
       this._setCurrentStep("OPERATIONAL_PENDING_GUARD");
   
@@ -495,7 +490,7 @@ class BaseBLEDevice {
     }, delayMs);
   }
 
-_parseData(result) {
+  _parseData(result) {
     if (this.isOtaInProgress || !result) return;
 
     const rawVal = result?.value !== undefined ? result.value : result;
@@ -510,7 +505,14 @@ _parseData(result) {
         bytes = new Uint8Array(rawVal.buffer, rawVal.byteOffset || 0, rawVal.byteLength || rawVal.buffer.byteLength);
       } else if (typeof rawVal === 'string') {
         const cleanStr = rawVal.trim();
-        if (cleanStr.startsWith('{') || cleanStr.startsWith('[')) {
+        // Проверка на шестнадцатеричную строку (Hex)
+        if (/^[0-9a-fA-F\s]+$/.test(cleanStr) && cleanStr.replace(/\s+/g, '').length % 2 === 0) {
+          const cleanHex = cleanStr.replace(/\s+/g, '');
+          bytes = new Uint8Array(cleanHex.length / 2);
+          for (let i = 0; i < cleanHex.length; i += 2) {
+            bytes[i / 2] = parseInt(cleanHex.substr(i, 2), 16);
+          }
+        } else if (cleanStr.startsWith('{') || cleanStr.startsWith('[')) {
           bytes = new TextEncoder().encode(rawVal);
         } else {
           try {
@@ -567,7 +569,7 @@ _parseData(result) {
     }
   }
   
-_processSingleLine(line) {
+  _processSingleLine(line) {
     const trimmed = line.trim();
     if (!trimmed) return;
 
@@ -593,12 +595,10 @@ _processSingleLine(line) {
         this.updateEspFwUI();
       }
 
-      // Вывод красиво отформатированного JSON на экран
       this._setElementText('telemetryData', JSON.stringify(telemetryData, null, 2));
 
       this.onTelemetry(telemetryData);
     } catch (e) {
-      // Пакет поврежден или разорван — пропускаем
       this._log(`[Skip] Невалидный JSON: ${trimmed}`);
     }
   }
@@ -641,7 +641,7 @@ _processSingleLine(line) {
 
   async sendJson(data) {
     let str = typeof data === "string" ? data : JSON.stringify(data);
-    if (!str.endsWith('\n')) str += '\n'; // Гарантируем разделитель команд для ESP32
+    if (!str.endsWith('\n')) str += '\n';
     return await this.sendCmd(str);
   }
 
