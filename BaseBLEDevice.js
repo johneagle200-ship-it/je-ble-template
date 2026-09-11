@@ -766,26 +766,32 @@ class BaseBLEDevice {
 
   updateUI(state) {
     let textState = "Отключено";
+    let iconClass = "ble-icon";
 
     if (state === "connected") {
       textState = "Подключено";
+      iconClass = "ble-icon connected";
       this._setElementClass('bleStatus', 'status connected');
       this._setElementStyle('bottomConnectBar', 'display', 'none');
       this._setElementStyle('btnDisconnect', 'display', 'block');
     } else if (state === "connecting" || state === "reconnecting" || state === "switching") {
       textState = state === "switching" ? "Поиск..." : (state === "connecting" ? "Подключение..." : "Поиск...");
+      iconClass = "ble-icon pending";
       this._setElementClass('bleStatus', 'status pending spinner-active');
       this._setElementStyle('bottomConnectBar', 'display', 'none');
       this._setElementStyle('btnDisconnect', 'display', 'block');
     } else if (state === "ota_start") {
       textState = "Загрузка файла...";
+      iconClass = "ble-icon pending";
     } else if (state === "crash_loop") {
       textState = "Заблокировано (Сбой)";
+      iconClass = "ble-icon error";
       this._setElementClass('bleStatus', 'status error');
       this._setElementStyle('bottomConnectBar', 'display', 'block');
       this._setElementStyle('btnDisconnect', 'display', 'none');
     } else {
       textState = "Отключено";
+      iconClass = "ble-icon";
       this._setElementClass('bleStatus', 'status');
       this._setElementStyle('bottomConnectBar', 'display', 'block');
       this._setElementStyle('btnDisconnect', 'display', 'none');
@@ -794,6 +800,7 @@ class BaseBLEDevice {
 
     this._setElementText('bleStatus', textState);
     this._setElementText('bleStatusInMenu', textState);
+    this._setElementClass('bleIconSvg', iconClass);
 
     if (typeof this.onStatusChangeCallback === 'function') {
       this.onStatusChangeCallback(state, textState);
