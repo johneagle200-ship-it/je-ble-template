@@ -1,19 +1,16 @@
 class BaseApp {
   constructor(config = {}) {
-    // Безопасное извлечение параметров из объекта или аргументов
     const repoOwner = typeof config === 'string' ? config : config?.repoOwner;
     const repoName = config?.repoName;
 
-    // Инициализация сервисов
     this.updater = new AppUpdater(repoOwner, repoName);
     this.ble = new BaseBLEDevice(config);
 
-    // Связываем передачу телеметрии в MainApp
+    // Подключаем транспортный коллбэк BaseBLEDevice к методу onTelemetry
     if (this.ble) {
-      this.ble.onTelemetry = (data) => this.onTelemetry(data);
+      this.ble.onTelemetryCallback = (data) => this.onTelemetry(data);
     }
 
-    // Глобальный перехватчик JS-ошибок
     window.onerror = (msg, url, line, col, error) => {
       alert(`🚨 Ошибка JS:\n${msg}\nСтрока: ${line}:${col}`);
       return true;
@@ -27,7 +24,6 @@ class BaseApp {
   async init() {
     console.log("[JE Core] Инициализация BaseApp...");
 
-    // 1. Модуль автообновлений (в изоляции)
     try {
       if (this.updater) {
         if (typeof this.updater.init === 'function') {
@@ -40,7 +36,6 @@ class BaseApp {
       console.error("[AppUpdater] Сбой автопроверки обновлений:", err);
     }
 
-    // 2. Модуль BLE (в изоляции)
     try {
       if (this.ble && typeof this.ble.init === 'function') {
         await this.ble.init();
