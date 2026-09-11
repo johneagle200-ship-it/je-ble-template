@@ -109,7 +109,7 @@ class AppUpdater {
     }
   }
 
-  // --- СКАЧИВАНИЕ БИНАРНИКА DЛЯ BLE OTA ---
+  // --- СКАЧИВАНИЕ БИНАРНИКА ДЛЯ BLE OTA ---
   async fetchFirmwareBinary() {
     if (!this.latestFirmwareInfo?.downloadUrl) {
       throw new Error("Ссылка на бинарник прошивки не найдена");
@@ -150,17 +150,37 @@ class AppUpdater {
 
   showFirmwareUpdateUI(fwInfo) {
     const badge = document.getElementById('menuBadge');
-    const fwNotice = document.getElementById('fwUpdateNotice');
-    const btnUpdateFw = document.getElementById('btnUpdateFirmware');
-    const fwTextEl = document.getElementById('fwUpdateNoticeText');
+    const fwNotice = document.getElementById('updateNotice'); // Карточка уведомлений в index.html
+    const btnUpdateFw = document.getElementById('btnUpdateFW'); // Поправлен ID (соответствует index.html)
+    const fwTextEl = document.getElementById('updateNoticeText');
 
     if (badge) badge.style.display = 'block';
     if (fwNotice) fwNotice.style.display = 'block';
     if (fwTextEl) {
       fwTextEl.innerText = `Доступна прошивка ESP32 v${fwInfo.version}: ${fwInfo.changelog}`;
     }
+
     if (btnUpdateFw) {
       btnUpdateFw.style.display = 'block';
+      btnUpdateFw.onclick = async () => {
+        try {
+          btnUpdateFw.disabled = true;
+          btnUpdateFw.innerText = "Загрузка...";
+          
+          const binBuffer = await this.fetchFirmwareBinary();
+          
+          if (window.app && window.app.ble) {
+            await window.app.ble.updateESP32Firmware(binBuffer);
+          } else {
+            throw new Error("BLE-модуль не доступен");
+          }
+        } catch (err) {
+          alert("Ошибка OTA-обновления: " + err.message);
+        } finally {
+          btnUpdateFw.disabled = false;
+          btnUpdateFw.innerText = "Прошить ESP32";
+        }
+      };
     }
   }
 
