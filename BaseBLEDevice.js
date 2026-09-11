@@ -396,13 +396,17 @@ class BaseBLEDevice {
       }
   
       try {
-        this.valueListener = await this.BluetoothLe.addListener('valueChange', onDataReceived);
+        //this.valueListener = await this.BluetoothLe.addListener('valueChange', onDataReceived);
+        const eventName = `notification|${deviceId}|${this.serviceUuid}|${this.txUuid}`;
+        this.valueListener = await this.BluetoothLe.addListener(eventName, onDataReceived);
         await this.BluetoothLe.startNotifications(notifOptions);
       } catch (notifErr) {
         await this._delay(600);
         if (isAborted()) return;
         if (!this.valueListener) {
-          this.valueListener = await this.BluetoothLe.addListener('valueChange', onDataReceived);
+          //this.valueListener = await this.BluetoothLe.addListener('valueChange', onDataReceived);
+          const eventName = `notification|${deviceId}|${this.serviceUuid}|${this.txUuid}`;
+          this.valueListener = await this.BluetoothLe.addListener(eventName, onDataReceived);
         }
         await this.BluetoothLe.startNotifications(notifOptions);
       }
