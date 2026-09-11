@@ -484,14 +484,33 @@ class BaseBLEDevice {
   }
 
   // Парсинг входящего потока байтов и сборка JSON-сообщений
+// Парсинг входящего потока байтов и сборка JSON-сообщений
   _parseData(result) {
     if (this.isOtaInProgress || !result) return;
 
-    try {
-      const rawVal = result?.value !== undefined ? result.value : result;
-      if (rawVal === undefined || rawVal === null) return;
+    // === 1. ЭКСТРЕННЫЙ ЛОГ: СРАЗУ ВЫВОДИМ СЫРЫЕ ДАННЫЕ В UI И В КОНСОЛЬ ===
+    const rawVal = result?.value !== undefined ? result.value : result;
+    let rawPreview = "";
 
-      let bytes;
+    try {
+      if (typeof rawVal === 'object' && rawVal !== null) {
+        rawPreview = JSON.stringify(rawVal);
+      } else {
+        rawPreview = String(rawVal);
+      }
+    } catch (e) {
+      rawPreview = String(rawVal);
+    }
+
+    // Печатаем прямо в окно логов (тег RAW)
+    if (typeof window.appendJsonLog === "function") {
+      window.appendJsonLog("RAW", rawPreview);
+    }
+    this._log(`[RAW RX] ${rawPreview}`);
+
+    // === 2. ПРЕОБРАЗОВАНИЕ В БАЙТЫ (С ПЕРЕХВАТОМ ОШИБОК) ===
+    let bytes;
+    try {
       if (rawVal instanceof Uint8Array) {
         bytes = rawVal;
       } else if (rawVal instanceof DataView) {
@@ -500,11 +519,11 @@ class BaseBLEDevice {
         bytes = new Uint8Array(rawVal.buffer, rawVal.byteOffset || 0, rawVal.byteLength || rawVal.buffer.byteLength);
       } else if (typeof rawVal === 'string') {
         const cleanStr = rawVal.trim();
-        // Прямое кодирование стандартных текстовых/JSON строк
+        // Если это незакодированная JSON-строка
         if (cleanStr.startsWith('{') || cleanStr.startsWith('[')) {
           bytes = new TextEncoder().encode(rawVal);
         } else {
-          // Декодирование Base64 для бинарных данных/плагинов
+          // Если это Base64 от Capacitor BLE
           try {
             const binaryString = window.atob(cleanStr);
             bytes = new Uint8Array(binaryString.length);
@@ -515,59 +534,82 @@ class BaseBLEDevice {
         }
       } else if (Array.isArray(rawVal)) {
         bytes = new Uint8Array(rawVal);
-      } else if (typeof rawVal === 'object') {
+      } else if (typeof rawVal === 'object' && rawVal !== null) {
         bytes = new Uint8Array(Object.values(rawVal));
       } else {
+        if (typeof window.appendJsonLog === "function") {
+          window.appendJsonLog("ERR", `Неизвестный тип rawVal: ${typeof rawVal}`);
+        }
         return;
       }
-
-      let chunk = "";
-      try {
-        chunk = this.streamDecoder.decode(bytes, { stream: true });
-      } catch (decErr) {
-        this.streamDecoder = new TextDecoder('utf-8', { fatal: false });
-        return;
+    } catch (err) {
+      if (typeof window.appendJsonLog === "function") {
+        window.appendJsonLog("ERR", `Ошибка байт-конвертации: ${err.message}`);
       }
+      return;
+    }
 
-      this.rxBuffer += chunk;
-      
-      if (this.rxBuffer.length > this.maxBufferSize) {
-        const lastNewline = this.rxBuffer.lastIndexOf('\n');
-        this.rxBuffer = (lastNewline !== -1) ? this.rxBuffer.substring(lastNewline + 1) : "";
-        return;
+    // === 3. ДЕКОДИРОВАНИЕ ЮНИКОДА ===
+    let chunk = "";
+    try {
+      chunk = this.streamDecoder.decode(bytes, { stream: true });
+    } catch (decErr) {
+      this.streamDecoder = new TextDecoder('utf-8', { fatal: false });
+      if (typeof window.appendJsonLog === "function") {
+        window.appendJsonLog("ERR", `Ошибка TextDecoder: ${decErr.message}`);
       }
+      return;
+    }
 
-      // 1. Попытка распарсить буфер по символам переноса строки \n
+    this.rxBuffer += chunk;
+
+    // Защита от переполнения буфера
+    if (this.rxBuffer.length > this.maxBufferSize) {
+      const lastNewline = this.rxBuffer.lastIndexOf('\n');
+      this.rxBuffer = (lastNewline !== -1) ? this.rxBuffer.substring(lastNewline + 1) : "";
+      return;
+    }
+
+    // === 4. ОБРАБОТКА И РАЗБОР БУФЕРА ===
+    if (this.rxBuffer.includes('\n')) {
       const lines = this.rxBuffer.split('\n');
-      this.rxBuffer = lines.pop(); // Оставляем неполный хвост в буфере
+      this.rxBuffer = lines.pop(); // Хвост оставляем в буфере
 
       for (const line of lines) {
         this._processSingleLine(line);
       }
-
-      // 2. Резервный разбор: если в буфере лежит готовый валидный JSON без \n в конце
-      if (this.rxBuffer.trim().startsWith('{') && this.rxBuffer.trim().endsWith('}')) {
+    } else {
+      // Резервный фолбэк: если пришел цельный JSON без \n
+      const trimmedBuf = this.rxBuffer.trim();
+      if (trimmedBuf.startsWith('{') && trimmedBuf.endsWith('}')) {
         try {
-          JSON.parse(this.rxBuffer.trim());
-          this._processSingleLine(this.rxBuffer);
-          this.rxBuffer = ""; // Очищаем буфер после успешной обработки
+          JSON.parse(trimmedBuf);
+          this._processSingleLine(trimmedBuf);
+          this.rxBuffer = "";
         } catch (e) {
-          // Ожидаем завершения передачи пакета
+          // Ожидаем оставшуюся часть пакета
         }
       }
-    } catch (e) {}
+    }
   }
-
+  
   // Обработка одиночной строки/JSON пакета
+// Обработка одиночной строки/JSON пакета
   _processSingleLine(line) {
     const trimmed = line.trim();
-    if (!trimmed) return;
-
-    // Вывод входящего пакета (RX) в логер
-    if (typeof window.appendJsonLog === "function") {
-      window.appendJsonLog("RX", trimmed);
+    if (!trimmed) {
+      this._log("[RX DROP] Получена пустая строка после trim()", "warn");
+      return;
     }
 
+    // 1. Гарантированный вывод RX в UI или консольный логер (с фолбэком)
+    if (typeof window.appendJsonLog === "function") {
+      window.appendJsonLog("RX", trimmed);
+    } else {
+      this._log(`[RX Direct] ${trimmed}`);
+    }
+
+    // 2. Разбор JSON с явным выводом ошибок вместо молчаливого catch
     try {
       const data = JSON.parse(trimmed);
 
@@ -585,9 +627,14 @@ class BaseBLEDevice {
       }
 
       this.onTelemetry(data);
-    } catch (e) {}
+    } catch (e) {
+      this._log(`[RX JSON ERR] Ошибка парсинга: "${trimmed}" — ${e.message}`, "error");
+      if (typeof window.appendJsonLog === "function") {
+        window.appendJsonLog("ERR", `Невалидный JSON: ${e.message}`);
+      }
+    }
   }
-
+  
   async _writeRaw(deviceId, service, characteristic, uint8Bytes) {
     const uint8ToHex = (bytes) => Array.from(bytes).map(b => b.toString(16).padStart(2, '0')).join(' ');
     await this.BluetoothLe.write({ deviceId, service, characteristic, value: uint8ToHex(uint8Bytes) });
