@@ -814,9 +814,20 @@ class BaseBLEDevice {
 
   _setElementClass(id, className) {
     const el = document.getElementById(id);
-    if (el) el.className = className;
+    if (el) {
+      if (el instanceof SVGElement) {
+        el.setAttribute('class', className);
+      } else {
+        el.className = className;
+      }
+    }
   }
-
+  
+  /*_setElementClass(id, className) {
+    const el = document.getElementById(id);
+    if (el) el.setAttribute('class', className);
+  }*/
+  
   _setElementStyle(id, property, value) {
     const el = document.getElementById(id);
     if (el) el.style[property] = value;
