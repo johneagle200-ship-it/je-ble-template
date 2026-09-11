@@ -372,33 +372,33 @@ class BaseBLEDevice {
     }
   }
   
-  async connectNativeBLE(deviceId) {
+async connectNativeBLE(deviceId) {
     if (!deviceId || !this.BluetoothLe || this.isConnecting) return;
-  
+
     await this.ensurePermissions();
     const currentSession = ++this.connectionSessionId;
     const isAborted = () => currentSession !== this.connectionSessionId;
-  
+
     try {
       this.isConnecting = true;
       clearTimeout(this.reconnectTimer);
       clearTimeout(this.stableTimer);
       this._stopWatchdog();
-  
+
       localStorage.setItem("ble_crash_pending", "1");
       this.updateUI("connecting");
       this.rxBuffer = "";
       this.streamDecoder = new TextDecoder('utf-8', { fatal: false });
       this.currentMtu = 23;
-  
+
       this._setCurrentStep("GATT_CONNECTING");
-      await this.BluetoothLe.connect({ deviceId, timeout: 12000 });
+      await this.BluetoothLe.connect({ deviceId, timeout: 3000 });
       if (isAborted()) return;
-  
+
       this._setCurrentStep("GATT_STABILIZING");
       await this._delay(600);
       if (isAborted()) return;
-  
+
       this._setCurrentStep("DISCOVER_SERVICES");
       try { 
         await this.BluetoothLe.getServices({ deviceId }); 
@@ -407,7 +407,7 @@ class BaseBLEDevice {
       }
       if (isAborted()) return;
       await this._delay(300);
-  
+
       this._setCurrentStep("REQUEST_MTU");
       if (typeof this.BluetoothLe.requestMtu === 'function') {
         try {
@@ -419,66 +419,71 @@ class BaseBLEDevice {
         if (isAborted()) return;
         await this._delay(300);
       }
-  
+
       this._setCurrentStep("START_NOTIFICATIONS_EXEC");
-      const notifOptions = {
-        deviceId,
-        service: this.serviceUuid,
-        characteristic: this.txUuid
-      };
+      const notifOptions = { deviceId, service: this.serviceUuid, characteristic: this.txUuid };
       
       const onDataReceived = (result) => {
-        if (currentSession === this.connectionSessionId) {
-          this._parseData(result);
-        }
+        if (!isAborted()) this._parseData(result);
       };
 
       if (this.valueListener) {
         try { await this.valueListener.remove(); } catch (e) {}
         this.valueListener = null;
       }
-  
+
+      const eventName = `notification|${deviceId}|${this.serviceUuid}|${this.txUuid}`;
+      
       try {
-        const eventName = `notification|${deviceId}|${this.serviceUuid}|${this.txUuid}`;
         this.valueListener = await this.BluetoothLe.addListener(eventName, onDataReceived);
         await this.BluetoothLe.startNotifications(notifOptions);
       } catch (notifErr) {
+        console.warn("First notification attempt failed, retrying...");
         await this._delay(600);
         if (isAborted()) return;
+        
         if (!this.valueListener) {
-          const eventName = `notification|${deviceId}|${this.serviceUuid}|${this.txUuid}`;
           this.valueListener = await this.BluetoothLe.addListener(eventName, onDataReceived);
         }
         await this.BluetoothLe.startNotifications(notifOptions);
       }
-  
+
       if (isAborted()) return;
 
       this._setCurrentStep("SUBSCRIBING_CCCD_WAIT");
       await this._delay(500);
       if (isAborted()) return;
-  
+
       this._setCurrentStep("CONNECTED_WAITING_STABILITY");
       this.updateUI("connected");
-  
+
       await this._safeSendHandshake();
+      if (isAborted()) return;
+
       this._setCurrentStep("OPERATIONAL_PENDING_GUARD");
-  
+
       this.stableTimer = setTimeout(() => {
-        if (this.connectedDeviceId && !this.isConnecting && currentSession === this.connectionSessionId) {
+        if (this.connectedDeviceId && !this.isConnecting && !isAborted()) {
           localStorage.removeItem("ble_crash_pending");
           this.autoConnectBlocked = false;
           this._setCurrentStep("STABLE_OPERATIONAL");
         }
       }, this.minStableSessionMs);
-  
+
     } catch (err) {
       console.error("BLE connect error:", err);
-      if (currentSession === this.connectionSessionId) {
-        this.updateUI("disconnected");
+      if (!isAborted()) {
+        // Умный реконнект, если связь не была разорвана вручную
+        if (!this.isExplicitDisconnect && !this.autoConnectBlocked && typeof this.scheduleReconnect === 'function') {
+          console.warn("[AutoConnect] Потеряна связь с ESP32, повторная попытка...");
+          this.updateUI("reconnecting");
+          this.scheduleReconnect(3000); 
+        } else {
+          this.updateUI("disconnected");
+        }
       }
     } finally {
-      if (currentSession === this.connectionSessionId) {
+      if (!isAborted()) {
         this.isConnecting = false;
       }
     }
