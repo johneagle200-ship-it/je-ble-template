@@ -1,10 +1,17 @@
 class AppUpdater {
-  constructor(config = {}) {
-    this.repoOwner = config.repoOwner || "johneagle200-ship-it";
-    this.repoName = config.repoName || "je-ble-template";
+  constructor(config = {}, repoName) {
+    if (typeof config === 'string') {
+      this.repoOwner = config;
+      this.repoName = repoName || "je-ble-template";
+    } else {
+      this.repoOwner = config?.repoOwner || "johneagle200-ship-it";
+      this.repoName = config?.repoName || "je-ble-template";
+    }
+    
     this.currentVersion = null;
     this.currentEspFwVersion = null;
     this.latestFirmwareInfo = null;
+    this.latestApkUrl = null;
   }
 
   _getPlugins() {
@@ -86,7 +93,7 @@ class AppUpdater {
 
       const res = await fetch(rawPkgUrl);
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      
+
       const pkg = await res.json();
       if (!pkg.firmware || !pkg.firmware.version) return;
 
@@ -94,7 +101,7 @@ class AppUpdater {
 
       if (this.isNewerVersion(remoteFwVer, this.currentEspFwVersion)) {
         const binFileName = pkg.firmware.file || "firmware.bin";
-        
+
         this.latestFirmwareInfo = {
           version: remoteFwVer,
           changelog: pkg.firmware.changelog || "",
@@ -119,7 +126,7 @@ class AppUpdater {
     const res = await fetch(this.latestFirmwareInfo.downloadUrl);
     if (!res.ok) throw new Error(`Ошибка скачивания файла: HTTP ${res.status}`);
 
-    return await res.arrayBuffer(); // Возвращает бинарник для передачи в BLE OTA
+    return await res.arrayBuffer();
   }
 
   isNewerVersion(remote, local) {
@@ -150,14 +157,22 @@ class AppUpdater {
 
   showFirmwareUpdateUI(fwInfo) {
     const badge = document.getElementById('menuBadge');
-    const fwNotice = document.getElementById('updateNotice'); // Карточка уведомлений в index.html
-    const btnUpdateFw = document.getElementById('btnUpdateFW'); // Поправлен ID (соответствует index.html)
-    const fwTextEl = document.getElementById('updateNoticeText');
+    // Ищем выделенный элемент под ESP32 или используем базовый
+    const fwNotice = document.getElementById('espUpdateNotice') || document.getElementById('updateNotice');
+    const btnUpdateFw = document.getElementById('btnUpdateFW');
+    const fwTextEl = document.getElementById('espUpdateNoticeText') || document.getElementById('updateNoticeText');
 
     if (badge) badge.style.display = 'block';
     if (fwNotice) fwNotice.style.display = 'block';
+
     if (fwTextEl) {
-      fwTextEl.innerText = `Доступна прошивка ESP32 v${fwInfo.version}: ${fwInfo.changelog}`;
+      const msg = `Доступна прошивка ESP32 v${fwInfo.version}: ${fwInfo.changelog}`;
+      // Если используется общий плашка-контейнер, дополняем текст, а не перетираем
+      if (fwTextEl.id === 'updateNoticeText' && fwTextEl.innerText && !fwTextEl.innerText.includes('ESP32')) {
+        fwTextEl.innerText += `\n${msg}`;
+      } else {
+        fwTextEl.innerText = msg;
+      }
     }
 
     if (btnUpdateFw) {
@@ -166,9 +181,9 @@ class AppUpdater {
         try {
           btnUpdateFw.disabled = true;
           btnUpdateFw.innerText = "Загрузка...";
-          
+
           const binBuffer = await this.fetchFirmwareBinary();
-          
+
           if (window.app && window.app.ble) {
             await window.app.ble.updateESP32Firmware(binBuffer);
           } else {
