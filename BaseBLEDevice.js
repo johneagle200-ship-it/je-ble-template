@@ -699,7 +699,7 @@ async connectNativeBLE(deviceId) {
   }
 
   // --- ИЗМЕНЕНИЯ В МЕТОДЕ ОБНОВЛЕНИЯ OTA ---
-  async updateESP32Firmware(source = null) {
+async updateESP32Firmware(source = null) {
     if (!confirm("Начать прошивку ESP32 по BLE?")) return;
     const sessionAtStart = this.connectionSessionId;
 
@@ -739,20 +739,30 @@ async connectNativeBLE(deviceId) {
 
       const chunkSize = Math.min(244, Math.max(20, (this.currentMtu || 23) - 3));
       const total = bytes.length;
+      
+      this._log(`[OTA] Старт передачи. MTU: ${this.currentMtu}, Чанк: ${chunkSize} байт, Всего: ${total} байт`);
+
+      let lastPercent = -1;
 
       for (let offset = 0; offset < total; offset += chunkSize) {
         if (!this.isOtaInProgress || sessionAtStart !== this.connectionSessionId || !this.connectedDeviceId) {
           throw new Error("Прошивка прервана");
         }
+        
         await this._sendBytes(bytes.slice(offset, offset + chunkSize), 4000);
-        await this._delay(15);
+        await this._delay(2); // Ускоренная пауза вместо 15 мс
 
         const percent = Math.round((offset / total) * 100);
-        if (offset % (chunkSize * 5) === 0 || offset + chunkSize >= total) {
+        
+        // Обновляем UI только при изменении процента для экономии ресурсов JS
+        if (percent !== lastPercent) {
+          lastPercent = percent;
           if (typeof this.onOtaProgressCallback === 'function') {
-            this.onOtaProgressCallback(percent);
+            this.onOtaProgressCallback(percent, offset + chunkSize, total);
           }
-          this._setElementText('bleStatus', `Прошивка ESP32: ${percent}%`);
+          if (percent % 5 === 0) {
+            this._setElementText('bleStatus', `Прошивка ESP32: ${percent}%`);
+          }
         }
       }
 
@@ -772,7 +782,7 @@ async connectNativeBLE(deviceId) {
       this.updateUI("connected");
     }
   }
-
+  
   onTelemetry(data) {
     if (typeof this.onTelemetryCallback === 'function') {
       this.onTelemetryCallback(data);
