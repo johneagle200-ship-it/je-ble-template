@@ -50,9 +50,9 @@ class MainApp extends BaseApp {
       if (fwEl) fwEl.innerText = fwVersion;
 
       // Вызываем проверку прошивки один раз за сессию подключения
-      if (!this.isFwChecked && this.appUpdater && typeof this.appUpdater.checkFirmwareUpdate === 'function') {
+      if (!this.isFwChecked && this.updater && typeof this.updater.checkFirmwareUpdate === 'function') {
         this.isFwChecked = true;
-        this.appUpdater.checkFirmwareUpdate(fwVersion);
+        this.updater.checkFirmwareUpdate(fwVersion);
       }
     }
   }
