@@ -656,11 +656,22 @@ async connectNativeBLE(deviceId) {
     }
   }
   
-  async _writeRaw(deviceId, service, characteristic, uint8Bytes) {
+  async _writeRaw(deviceId, service, characteristic, uint8Bytes, skipResponse = false) {
     const uint8ToHex = (bytes) => Array.from(bytes).map(b => b.toString(16).padStart(2, '0')).join(' ');
-    await this.BluetoothLe.write({ deviceId, service, characteristic, value: uint8ToHex(uint8Bytes) });
+    const payload = { deviceId, service, characteristic, value: uint8ToHex(uint8Bytes) };
+
+    if (skipResponse && typeof this.BluetoothLe.writeWithoutResponse === 'function') {
+      await this.BluetoothLe.writeWithoutResponse(payload);
+    } else {
+      await this.BluetoothLe.write(payload);
+    }
     return true;
-  }  
+  }
+
+  async _sendBytesFast(uint8Bytes) {
+    if (!this.connectedDeviceId || !this.BluetoothLe) throw new Error("Устройство не подключено");
+    return this._writeRaw(this.connectedDeviceId, this.serviceUuid, this.rxUuid, uint8Bytes, true);
+  }
   
   async _sendBytes(uint8Bytes, timeoutMs = 3000) {
     if (!this.connectedDeviceId || !this.BluetoothLe) throw new Error("Устройство не подключено");
@@ -698,8 +709,7 @@ async connectNativeBLE(deviceId) {
     return await this.sendCmd(str);
   }
 
-  // --- ИЗМЕНЕНИЯ В МЕТОДЕ ОБНОВЛЕНИЯ OTA ---
-async updateESP32Firmware(source = null) {
+  async updateESP32Firmware(source = null) {
     if (!confirm("Начать прошивку ESP32 по BLE?")) return;
     const sessionAtStart = this.connectionSessionId;
 
@@ -749,8 +759,8 @@ async updateESP32Firmware(source = null) {
           throw new Error("Прошивка прервана");
         }
         
-        await this._sendBytes(bytes.slice(offset, offset + chunkSize), 4000);
-        await this._delay(2); // Ускоренная пауза вместо 15 мс
+        await this._sendBytesFast(bytes.slice(offset, offset + chunkSize));
+        await this._delay(2); // Позволяет стеку ОС не захлебнуться
 
         const percent = Math.round((offset / total) * 100);
         
