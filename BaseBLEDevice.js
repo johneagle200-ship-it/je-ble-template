@@ -725,6 +725,16 @@ class BaseBLEDevice {
   }
 
   async updateESP32Firmware(source = null) {
+    // 0. Защита от гонки состояний (Race Condition Guard): Запрет запуска OTA до полной готовности BLE
+    if (!this.connectedDeviceId || this.isConnecting) {
+      alert("Устройство не подключено или находится в процессе подключения!");
+      return;
+    }
+    if (this.currentStep !== "STABLE_OPERATIONAL" && this.currentStep !== "OPERATIONAL_PENDING_GUARD") {
+      alert(`Соединение ещё не стабилизировалось (Статус: ${this.currentStep}). Подождите пару секунд.`);
+      return;
+    }
+
     let bytes;
     let confirmMsg = "Начать прошивку ESP32 по BLE?";
     let binUrl = typeof source === 'string' ? source : null;
@@ -830,22 +840,34 @@ class BaseBLEDevice {
       this._log(`[OTA] Старт передачи. Чанк: ${chunkSize} байт, Всего пакетов: ${Math.ceil(total / chunkSize)}`);
 
       let lastPercent = -1;
-      const BATCH_SIZE = 6; // Конвейерная отправка микробатчами без блокировки JS-потока на каждый пакет
+      const BATCH_SIZE = 4; // Уменьшен размер микропачки во избежание ошибки 201 (GATT_CONGESTED)
       let batchPromises = [];
+
+      // Вспомогательный метод отправки пакета с автоповторами при переполнении буфера BLE
+      const sendChunkWithRetry = async (dataChunk, retries = 3) => {
+        for (let attempt = 0; attempt < retries; attempt++) {
+          try {
+            return await this._sendBytesFast(dataChunk);
+          } catch (err) {
+            if (attempt === retries - 1) throw err;
+            await this._delay(15 * (attempt + 1));
+          }
+        }
+      };
 
       for (let offset = 0; offset < total; offset += chunkSize) {
         if (!this.isOtaInProgress || sessionAtStart !== this.connectionSessionId || !this.connectedDeviceId) {
           throw new Error("Прошивка прервана");
         }
         
-        // subarray предотвращает выделение памяти и копирование буфера
         const chunk = bytes.subarray(offset, Math.min(offset + chunkSize, total));
-        batchPromises.push(this._sendBytesFast(chunk));
+        batchPromises.push(sendChunkWithRetry(chunk));
 
-        // Ждем выполнения пачки вызовов нативного моста, не вызывая задержек на каждый пакет
+        // Ждём завершения микропачки и делаем задержку 2ms для разгрузки нативного BLE-стека
         if (batchPromises.length >= BATCH_SIZE) {
           await Promise.all(batchPromises);
           batchPromises = [];
+          await this._delay(2); 
         }
 
         const percent = Math.round((offset / total) * 100);
