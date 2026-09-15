@@ -42,6 +42,9 @@ class BaseBLEDevice {
     this.maxBufferSize = config.maxBufferSize || 16384;
     this.currentMtu = 23;
 
+    // LUT-таблица (Look-Up Table) для мгновенного форматирования байт в HEX
+    this._hexTable = Array.from({ length: 256 }, (_, i) => i.toString(16).padStart(2, '0'));
+
     // Слушатели и плагин Capacitor BluetoothLe
     this.valueListener = null;
     this.disconnectListener = null;
@@ -412,7 +415,10 @@ class BaseBLEDevice {
       if (typeof this.BluetoothLe.requestMtu === 'function') {
         try {
           const mtuRes = await this.BluetoothLe.requestMtu({ deviceId, mtu: 247 });
-          if (mtuRes?.mtu) this.currentMtu = mtuRes.mtu;
+          if (mtuRes?.mtu) {
+            this.currentMtu = mtuRes.mtu;
+            this._log(`[BLE Connect] Согласован MTU: ${this.currentMtu}`);
+          }
         } catch (mtuErr) {
           console.warn("requestMtu warning:", mtuErr);
         }
@@ -656,22 +662,25 @@ class BaseBLEDevice {
     }
   }
   
-  async _writeRaw(deviceId, service, characteristic, uint8Bytes, skipResponse = false) {
-    // Быстрое форматирование в HEX без создания лишних объектов
-    let hexStr = "";
-    for (let i = 0; i < uint8Bytes.length; i++) {
-      if (i > 0) hexStr += " ";
-      hexStr += uint8Bytes[i].toString(16).padStart(2, '0');
+  // Высокоскоростное преобразование Uint8Array в HEX-строку без вызова padStart и лишних выделений памяти
+  _fastBytesToHex(uint8Bytes) {
+    const len = uint8Bytes.length;
+    const hexParts = new Array(len);
+    for (let i = 0; i < len; i++) {
+      hexParts[i] = this._hexTable[uint8Bytes[i]];
     }
+    return hexParts.join(' ');
+  }
 
+  async _writeRaw(deviceId, service, characteristic, uint8Bytes, skipResponse = false) {
+    const hexStr = this._fastBytesToHex(uint8Bytes);
     const payload = { deviceId, service, characteristic, value: hexStr };
 
     if (skipResponse && typeof this.BluetoothLe.writeWithoutResponse === 'function') {
-      await this.BluetoothLe.writeWithoutResponse(payload);
+      return this.BluetoothLe.writeWithoutResponse(payload);
     } else {
-      await this.BluetoothLe.write(payload);
+      return this.BluetoothLe.write(payload);
     }
-    return true;
   }
 
   async _sendBytesFast(uint8Bytes) {
@@ -781,6 +790,26 @@ class BaseBLEDevice {
         throw new Error("Соединение прервано");
       }
 
+      // 1. Повторный жесткий запрос MTU 247 непосредственно перед OTA
+      if (typeof this.BluetoothLe.requestMtu === 'function') {
+        try {
+          const mtuRes = await this.BluetoothLe.requestMtu({ deviceId: this.connectedDeviceId, mtu: 247 });
+          if (mtuRes?.mtu) this.currentMtu = mtuRes.mtu;
+        } catch (mErr) {
+          this._log(`[OTA MTU] Ошибка запроса MTU перед OTA: ${mErr.message}`, "warn");
+        }
+      }
+
+      // Наглядный лог состояния MTU
+      const isMtuOptimal = this.currentMtu === 247;
+      const mtuStatusMsg = isMtuOptimal 
+        ? `[OTA CLEAR MTU CHECK] MTU = ${this.currentMtu} (Оптимально, размер чанка 244B)` 
+        : `[OTA CLEAR MTU CHECK] ВНИМАНИЕ! MTU = ${this.currentMtu} (Меньше 247, скорость просядет!)`;
+      
+      this._log("==========================================");
+      this._log(mtuStatusMsg, isMtuOptimal ? "info" : "warn");
+      this._log("==========================================");
+
       // Запрос High Priority (минимальный интервал BLE) для Android
       if (typeof this.BluetoothLe.requestConnectionPriority === 'function') {
         try {
@@ -798,36 +827,42 @@ class BaseBLEDevice {
       const chunkSize = Math.min(244, Math.max(20, (this.currentMtu || 23) - 3));
       const total = bytes.length;
       
-      this._log(`[OTA] Старт передачи. MTU: ${this.currentMtu}, Чанк: ${chunkSize} байт, Всего: ${total} байт`);
+      this._log(`[OTA] Старт передачи. Чанк: ${chunkSize} байт, Всего пакетов: ${Math.ceil(total / chunkSize)}`);
 
       let lastPercent = -1;
-      let batchCount = 0;
+      const BATCH_SIZE = 6; // Конвейерная отправка микробатчами без блокировки JS-потока на каждый пакет
+      let batchPromises = [];
 
       for (let offset = 0; offset < total; offset += chunkSize) {
         if (!this.isOtaInProgress || sessionAtStart !== this.connectionSessionId || !this.connectedDeviceId) {
           throw new Error("Прошивка прервана");
         }
         
-        await this._sendBytesFast(bytes.slice(offset, offset + chunkSize));
-        batchCount++;
+        // subarray предотвращает выделение памяти и копирование буфера
+        const chunk = bytes.subarray(offset, Math.min(offset + chunkSize, total));
+        batchPromises.push(this._sendBytesFast(chunk));
 
-        // Разгрузка потока JS каждые 15 пакетов
-        if (batchCount >= 15) {
-          batchCount = 0;
-          await new Promise(resolve => setTimeout(resolve, 0));
+        // Ждем выполнения пачки вызовов нативного моста, не вызывая задержек на каждый пакет
+        if (batchPromises.length >= BATCH_SIZE) {
+          await Promise.all(batchPromises);
+          batchPromises = [];
         }
 
         const percent = Math.round((offset / total) * 100);
-        
         if (percent !== lastPercent) {
           lastPercent = percent;
           if (typeof this.onOtaProgressCallback === 'function') {
-            this.onOtaProgressCallback(percent, offset + chunkSize, total);
+            this.onOtaProgressCallback(percent, Math.min(offset + chunkSize, total), total);
           }
           if (percent % 5 === 0) {
-            this._setElementText('bleStatus', `Прошивка ESP32: ${percent}%`);
+            this._setElementText('bleStatus', `Прошивка ESP32: ${percent}% (MTU: ${this.currentMtu})`);
           }
         }
+      }
+
+      // Отправка оставшихся пакетов
+      if (batchPromises.length > 0) {
+        await Promise.all(batchPromises);
       }
 
       await this._delay(200);
