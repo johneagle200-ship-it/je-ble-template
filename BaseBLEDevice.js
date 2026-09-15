@@ -24,7 +24,7 @@ class BaseBLEDevice {
     // Сторожевой таймер (Watchdog) для контроля зависания связи
     this.watchdogTimer = null;
     this.lastRxTimestamp = 0;
-    this.watchdogIntervalMs = config.watchdogIntervalMs || 2000;//12000;
+    this.watchdogIntervalMs = config.watchdogIntervalMs || 2000;
     this.isWatchdogArmed = false;
 
     this.connectionSessionId = 0;
@@ -372,7 +372,7 @@ class BaseBLEDevice {
     }
   }
   
-async connectNativeBLE(deviceId) {
+  async connectNativeBLE(deviceId) {
     if (!deviceId || !this.BluetoothLe || this.isConnecting) return;
 
     await this.ensurePermissions();
@@ -657,8 +657,14 @@ async connectNativeBLE(deviceId) {
   }
   
   async _writeRaw(deviceId, service, characteristic, uint8Bytes, skipResponse = false) {
-    const uint8ToHex = (bytes) => Array.from(bytes).map(b => b.toString(16).padStart(2, '0')).join(' ');
-    const payload = { deviceId, service, characteristic, value: uint8ToHex(uint8Bytes) };
+    // Быстрое форматирование в HEX без создания промежуточных массивов
+    let hexStr = "";
+    for (let i = 0; i < uint8Bytes.length; i++) {
+      if (i > 0) hexStr += " ";
+      hexStr += uint8Bytes[i].toString(16).padStart(2, '0');
+    }
+
+    const payload = { deviceId, service, characteristic, value: hexStr };
 
     if (skipResponse && typeof this.BluetoothLe.writeWithoutResponse === 'function') {
       await this.BluetoothLe.writeWithoutResponse(payload);
@@ -753,14 +759,22 @@ async connectNativeBLE(deviceId) {
       this._log(`[OTA] Старт передачи. MTU: ${this.currentMtu}, Чанк: ${chunkSize} байт, Всего: ${total} байт`);
 
       let lastPercent = -1;
+      let batchCount = 0;
 
       for (let offset = 0; offset < total; offset += chunkSize) {
         if (!this.isOtaInProgress || sessionAtStart !== this.connectionSessionId || !this.connectedDeviceId) {
           throw new Error("Прошивка прервана");
         }
         
+        // Отправка без ожидания и без _delay
         await this._sendBytesFast(bytes.slice(offset, offset + chunkSize));
-        await this._delay(2); // Позволяет стеку ОС не захлебнуться
+        batchCount++;
+
+        // Разрешаем Event Loop отрендерить UI только каждые 15 пакетов
+        if (batchCount >= 15) {
+          batchCount = 0;
+          await new Promise(resolve => setTimeout(resolve, 0));
+        }
 
         const percent = Math.round((offset / total) * 100);
         
