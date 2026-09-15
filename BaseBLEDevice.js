@@ -657,7 +657,7 @@ class BaseBLEDevice {
   }
   
   async _writeRaw(deviceId, service, characteristic, uint8Bytes, skipResponse = false) {
-    // Быстрое форматирование в HEX без создания промежуточных массивов
+    // Быстрое форматирование в HEX без создания лишних объектов
     let hexStr = "";
     for (let i = 0; i < uint8Bytes.length; i++) {
       if (i > 0) hexStr += " ";
@@ -715,23 +715,20 @@ class BaseBLEDevice {
     return await this.sendCmd(str);
   }
 
-async updateESP32Firmware(source = null) {
+  async updateESP32Firmware(source = null) {
     let bytes;
     let confirmMsg = "Начать прошивку ESP32 по BLE?";
     let binUrl = typeof source === 'string' ? source : null;
 
-    // 1. Если переданы сырые байты (локальный файл)
     if (source instanceof Uint8Array || source instanceof ArrayBuffer) {
       if (!confirm("Начать прошивку ESP32 из локального файла?")) return;
       bytes = source instanceof Uint8Array ? source : new Uint8Array(source);
     } 
-    // 2. Если скачиваем из GitHub (дефолтное поведение)
     else {
       let firmwareMetadata = null;
 
       if (!binUrl) {
         try {
-          // Запрашиваем актуальный package.json из репозитория
           const packageUrl = `https://raw.githubusercontent.com/${this.repoOwner}/${this.repoName}/main/package.json?t=${Date.now()}`;
           const pkgRes = await fetch(packageUrl);
           
@@ -746,13 +743,11 @@ async updateESP32Firmware(source = null) {
           this._log("[OTA] Ошибка получения package.json, используем фоллбэк.", "warn");
         }
 
-        // Если манифест недоступен, берем дефолтное имя из твоего package.json
         if (!binUrl) {
           binUrl = `https://raw.githubusercontent.com/${this.repoOwner}/${this.repoName}/main/JE_Base_Device.ino.bin`;
         }
       }
 
-      // Формируем диалог с чейнджлогом, если удалось получить манифест
       if (firmwareMetadata) {
         confirmMsg = `Доступна прошивка v${firmwareMetadata.version}\nЧто нового: ${firmwareMetadata.changelog}\n\nНачать обновление?`;
       }
@@ -786,6 +781,16 @@ async updateESP32Firmware(source = null) {
         throw new Error("Соединение прервано");
       }
 
+      // Запрос High Priority (минимальный интервал BLE) для Android
+      if (typeof this.BluetoothLe.requestConnectionPriority === 'function') {
+        try {
+          await this.BluetoothLe.requestConnectionPriority({ deviceId: this.connectedDeviceId, priority: 1 });
+          this._log("[OTA] Запрошен High Priority для соединения BLE (Android)");
+        } catch (pErr) {
+          console.warn("requestConnectionPriority warning:", pErr);
+        }
+      }
+
       this._log(`[OTA] Отправка команды OTA_START (размер: ${bytes.length} байт)`);
       await this.sendCmd(JSON.stringify({ cmd: "OTA_START", size: bytes.length }) + '\n');
       await this._delay(1000);
@@ -806,7 +811,7 @@ async updateESP32Firmware(source = null) {
         await this._sendBytesFast(bytes.slice(offset, offset + chunkSize));
         batchCount++;
 
-        // Пропуск тактов для отрисовки UI
+        // Разгрузка потока JS каждые 15 пакетов
         if (batchCount >= 15) {
           batchCount = 0;
           await new Promise(resolve => setTimeout(resolve, 0));
