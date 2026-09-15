@@ -715,8 +715,62 @@ class BaseBLEDevice {
     return await this.sendCmd(str);
   }
 
-  async updateESP32Firmware(source = null) {
-    if (!confirm("Начать прошивку ESP32 по BLE?")) return;
+async updateESP32Firmware(source = null) {
+    let bytes;
+    let confirmMsg = "Начать прошивку ESP32 по BLE?";
+    let binUrl = typeof source === 'string' ? source : null;
+
+    // 1. Если переданы сырые байты (локальный файл)
+    if (source instanceof Uint8Array || source instanceof ArrayBuffer) {
+      if (!confirm("Начать прошивку ESP32 из локального файла?")) return;
+      bytes = source instanceof Uint8Array ? source : new Uint8Array(source);
+    } 
+    // 2. Если скачиваем из GitHub (дефолтное поведение)
+    else {
+      let firmwareMetadata = null;
+
+      if (!binUrl) {
+        try {
+          // Запрашиваем актуальный package.json из репозитория
+          const packageUrl = `https://raw.githubusercontent.com/${this.repoOwner}/${this.repoName}/main/package.json?t=${Date.now()}`;
+          const pkgRes = await fetch(packageUrl);
+          
+          if (pkgRes.ok) {
+            const pkgData = await pkgRes.json();
+            if (pkgData.firmware) {
+              firmwareMetadata = pkgData.firmware;
+              binUrl = `https://raw.githubusercontent.com/${this.repoOwner}/${this.repoName}/main/${firmwareMetadata.file}`;
+            }
+          }
+        } catch (e) {
+          this._log("[OTA] Ошибка получения package.json, используем фоллбэк.", "warn");
+        }
+
+        // Если манифест недоступен, берем дефолтное имя из твоего package.json
+        if (!binUrl) {
+          binUrl = `https://raw.githubusercontent.com/${this.repoOwner}/${this.repoName}/main/JE_Base_Device.ino.bin`;
+        }
+      }
+
+      // Формируем диалог с чейнджлогом, если удалось получить манифест
+      if (firmwareMetadata) {
+        confirmMsg = `Доступна прошивка v${firmwareMetadata.version}\nЧто нового: ${firmwareMetadata.changelog}\n\nНачать обновление?`;
+      }
+
+      if (!confirm(confirmMsg)) return;
+
+      this.updateUI("ota_start");
+      try {
+        const res = await fetch(binUrl);
+        if (!res.ok) throw new Error(`Ошибка HTTP: ${res.status}`);
+        bytes = new Uint8Array(await res.arrayBuffer());
+      } catch (err) {
+        alert("Не удалось скачать прошивку: " + err.message);
+        this.updateUI("connected");
+        return;
+      }
+    }
+
     const sessionAtStart = this.connectionSessionId;
 
     const hideNoticeUI = () => {
@@ -728,24 +782,7 @@ class BaseBLEDevice {
 
     try {
       this.isOtaInProgress = true;
-      this.updateUI("ota_start");
-
-      let bytes;
-      if (source instanceof Uint8Array) {
-        bytes = source;
-      } else if (source instanceof ArrayBuffer) {
-        bytes = new Uint8Array(source);
-      } else {
-        const binUrl = typeof source === 'string' 
-          ? source 
-          : `https://raw.githubusercontent.com/${this.repoOwner}/${this.repoName}/main/firmware.bin`;
-
-        const res = await fetch(binUrl);
-        if (!res.ok) throw new Error(`Ошибка загрузки firmware.bin (${res.status})`);
-        bytes = new Uint8Array(await res.arrayBuffer());
-      }
-
-      if (!this.isOtaInProgress || sessionAtStart !== this.connectionSessionId || !this.connectedDeviceId) {
+      if (sessionAtStart !== this.connectionSessionId || !this.connectedDeviceId) {
         throw new Error("Соединение прервано");
       }
 
@@ -766,11 +803,10 @@ class BaseBLEDevice {
           throw new Error("Прошивка прервана");
         }
         
-        // Отправка без ожидания и без _delay
         await this._sendBytesFast(bytes.slice(offset, offset + chunkSize));
         batchCount++;
 
-        // Разрешаем Event Loop отрендерить UI только каждые 15 пакетов
+        // Пропуск тактов для отрисовки UI
         if (batchCount >= 15) {
           batchCount = 0;
           await new Promise(resolve => setTimeout(resolve, 0));
@@ -778,7 +814,6 @@ class BaseBLEDevice {
 
         const percent = Math.round((offset / total) * 100);
         
-        // Обновляем UI только при изменении процента для экономии ресурсов JS
         if (percent !== lastPercent) {
           lastPercent = percent;
           if (typeof this.onOtaProgressCallback === 'function') {
